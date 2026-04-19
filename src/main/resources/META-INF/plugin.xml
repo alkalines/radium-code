@@ -26,8 +26,11 @@
     <!-- Extensions defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow id="MyToolWindow" factoryClass="net.alkalines.radiumcode.MyToolWindowFactory"
-                    icon="AllIcons.Toolwindows.ToolWindowPalette"/>
+        <iconMapper mappingFile="RadiumCodeIconMappings.json"/>
+        <toolWindow id="MyToolWindow"
+                    factoryClass="net.alkalines.radiumcode.MyToolWindowFactory"
+                    anchor="left"
+                    icon="/META-INF/toolWindowIcon.svg"/>
     </extensions>
 
 </idea-plugin>
