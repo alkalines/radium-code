@@ -68,7 +68,21 @@ class OpenRouterProvider internal constructor(
             displayName = "OpenRouter",
             capabilities = setOf(IlCapability.TEXT, IlCapability.THINKING, IlCapability.TOOL_CALLING, IlCapability.STREAMING),
             isDefault = true,
-        )
+        ),
+        IlModelDescriptor(
+            providerId = providerId,
+            modelId = "moonshotai/kimi-k2.6",
+            displayName = "Kimi K2.6",
+            capabilities = setOf(IlCapability.TEXT, IlCapability.THINKING, IlCapability.TOOL_CALLING, IlCapability.STREAMING),
+            isDefault = false,
+        ),
+        IlModelDescriptor(
+            providerId = providerId,
+            modelId = "minimax/minimax-m2.7",
+            displayName = "MiniMax M2.7",
+            capabilities = setOf(IlCapability.TEXT, IlCapability.THINKING, IlCapability.TOOL_CALLING, IlCapability.STREAMING),
+            isDefault = false,
+        ),
     )
 
     private val logger = Logger.getInstance(OpenRouterProvider::class.java)

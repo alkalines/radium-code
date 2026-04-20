@@ -161,6 +161,9 @@ private fun AgentToolWindowContent() {
                             .clip(RoundedCornerShape(10.dp))
                             .background(if (selected) selectedRowColor else Color.Transparent)
                             .clickable {
+                                registry.allModels.firstOrNull { it.modelId == option }?.let {
+                                    runtime.selectModel(it.providerId, it.modelId)
+                                }
                                 modelMenuExpanded = false
                             }
                             .padding(horizontal = 12.dp, vertical = 10.dp),

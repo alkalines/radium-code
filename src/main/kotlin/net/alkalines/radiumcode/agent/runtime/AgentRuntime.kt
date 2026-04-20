@@ -60,6 +60,10 @@ class AgentRuntime(
 
     private var activeJob: Job? = null
 
+    fun selectModel(providerId: String, modelId: String) {
+        _state.value = _state.value.copy(selectedProviderId = providerId, selectedModelId = modelId)
+    }
+
     fun submitPrompt(prompt: String) {
         val userTurn = IlConversationTurn.userText("user-${UUID.randomUUID()}", prompt)
         reducer.session = reducer.session.copy(turns = reducer.session.turns + userTurn)
@@ -90,11 +94,12 @@ class AgentRuntime(
             _session.value = reducer.session
             return
         }
-        val model = registry.defaultModel ?: return
-        val provider = registry.provider(model.providerId)
+        val selectedProviderId = _state.value.selectedProviderId ?: registry.defaultModel?.providerId ?: return
+        val selectedModelId = _state.value.selectedModelId ?: registry.defaultModel?.modelId ?: return
+        val provider = registry.provider(selectedProviderId)
         val generateRequest = IlGenerateRequest(
-            providerId = model.providerId,
-            modelId = model.modelId,
+            providerId = selectedProviderId,
+            modelId = selectedModelId,
             input = reducer.session.turns,
             tools = emptyList(),
             toolChoice = IlToolChoice.Auto,
