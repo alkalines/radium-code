@@ -2,6 +2,7 @@ package net.alkalines.radiumcode
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import net.alkalines.radiumcode.agent.il.IlCapability
 import net.alkalines.radiumcode.agent.il.IlConversationSession
@@ -27,7 +28,7 @@ class AgentToolWindowPresenterTest {
     }
 
     @Test
-    fun `maps session turns into visible chat rows without exposing thinking text`() {
+    fun `exposes assistant thinking text as a thinking chat item before the final answer`() {
         val session = IlConversationSession(
             turns = listOf(
                 IlConversationTurn.userText("user-1", "Hello"),
@@ -50,10 +51,39 @@ class AgentToolWindowPresenterTest {
 
         val items = AgentToolWindowPresenter.chatItems(session)
 
-        assertEquals(3, items.size)
+        assertEquals(4, items.size)
         assertEquals("Hello", items[0].text)
-        assertEquals("Answer", items[1].text)
-        assertTrue(items[2].text.contains("OpenRouterProvider"))
+        assertEquals(AgentChatItem.Kind.THINKING, items[1].kind)
+        assertEquals("Planning", items[1].text)
+        assertEquals(AgentChatItem.Kind.TEXT, items[2].kind)
+        assertEquals("Answer", items[2].text)
+        assertTrue(items[3].text.contains("OpenRouterProvider"))
+    }
+
+    @Test
+    fun `auto scroll signal changes as streaming text grows and items are added`() {
+        val empty = emptyList<AgentChatItem>()
+        val oneShort = listOf(AgentChatItem(IlRole.ASSISTANT, "hi", AgentChatItem.Kind.TEXT, AgentChatItem.Alignment.START))
+        val oneLonger = listOf(AgentChatItem(IlRole.ASSISTANT, "hi there", AgentChatItem.Kind.TEXT, AgentChatItem.Alignment.START))
+        val twoItems = oneShort + AgentChatItem(IlRole.ASSISTANT, "x", AgentChatItem.Kind.TEXT, AgentChatItem.Alignment.START)
+
+        val emptySignal = AgentToolWindowPresenter.autoScrollSignal(empty)
+        val shortSignal = AgentToolWindowPresenter.autoScrollSignal(oneShort)
+        val longerSignal = AgentToolWindowPresenter.autoScrollSignal(oneLonger)
+        val twoSignal = AgentToolWindowPresenter.autoScrollSignal(twoItems)
+
+        assertEquals(0, emptySignal)
+        assertTrue(shortSignal > emptySignal, "signal must increase when content appears")
+        assertTrue(longerSignal > shortSignal, "signal must increase when text grows inside the same item")
+        assertTrue(twoSignal > shortSignal, "signal must increase when a new item is appended")
+    }
+
+    @Test
+    fun `italicises thinking chat items and keeps others upright`() {
+        assertTrue(AgentToolWindowPresenter.shouldItalicize(AgentChatItem.Kind.THINKING))
+        assertFalse(AgentToolWindowPresenter.shouldItalicize(AgentChatItem.Kind.TEXT))
+        assertFalse(AgentToolWindowPresenter.shouldItalicize(AgentChatItem.Kind.TOOL))
+        assertFalse(AgentToolWindowPresenter.shouldItalicize(AgentChatItem.Kind.ERROR))
     }
 
     @Test

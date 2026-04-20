@@ -135,7 +135,6 @@ class OpenRouterProvider internal constructor(
                         return@forEach
                     }
                     val payloadText = line.removePrefix("data:").trim()
-                    if (payloadText == "[DONE]") return@forEach
                     val parsed = runCatching { json.parseToJsonElement(payloadText) }.getOrNull()
                     val payload = parsed as? JsonObject ?: run {
                         logger.warn("OpenRouter SSE payload is not a JSON object: $payloadText")

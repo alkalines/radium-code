@@ -25,12 +25,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -183,6 +185,11 @@ private fun AgentToolWindowContent() {
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            val chatScrollState = rememberScrollState()
+            val chatLengthSignal = AgentToolWindowPresenter.autoScrollSignal(chatItems)
+            LaunchedEffect(chatLengthSignal) {
+                chatScrollState.scrollTo(chatScrollState.maxValue)
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -197,7 +204,7 @@ private fun AgentToolWindowContent() {
                         }
                     )
                     .padding(14.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScroll(chatScrollState),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 chatItems.forEach { item ->
@@ -225,9 +232,10 @@ private fun AgentToolWindowContent() {
                             AgentChatItem.Kind.TOOL -> placeholderColor
                             AgentChatItem.Kind.TEXT -> textColor
                         }
+                        val fontStyle = if (AgentToolWindowPresenter.shouldItalicize(item.kind)) FontStyle.Italic else FontStyle.Normal
                         Text(
                             item.text,
-                            style = TextStyle(color = plainTextColor, fontSize = 14.sp, lineHeight = 22.sp)
+                            style = TextStyle(color = plainTextColor, fontSize = 14.sp, lineHeight = 22.sp, fontStyle = fontStyle)
                         )
                     }
                 }

@@ -287,6 +287,124 @@ class OpenRouterProviderTest {
     }
 
     @Test
+    fun `skips sse payloads that are not json objects without aborting the stream`() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "text/event-stream")
+                    .setBody(
+                        """
+                        data: {"type":"response.created","response":{"id":"resp_skip"}}
+
+                        data: [DONE]
+
+                        data: {"type":"response.completed","response":{"id":"resp_skip","status":"completed","output":[]}}
+
+                        """.trimIndent()
+                    )
+            )
+
+            val provider = OpenRouterProvider(
+                baseUrl = server.url("/api/v1/responses"),
+                apiKeyOverride = "test-key",
+            )
+
+            val events = provider.stream(request()).toList()
+
+            assertTrue(events.any { it is TurnCompleted })
+            assertFalse(events.any { it is StreamError })
+        }
+    }
+
+    @Test
+    fun `tolerates response completed payload with non object usage`() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "text/event-stream")
+                    .setBody(
+                        """
+                        data: {"type":"response.created","response":{"id":"resp_bad_usage"}}
+
+                        data: {"type":"response.completed","response":{"id":"resp_bad_usage","status":"completed","output":[],"usage":[]}}
+
+                        """.trimIndent()
+                    )
+            )
+
+            val provider = OpenRouterProvider(
+                baseUrl = server.url("/api/v1/responses"),
+                apiKeyOverride = "test-key",
+            )
+
+            val events = provider.stream(request()).toList()
+
+            assertTrue(events.any { it is TurnCompleted })
+            assertFalse(events.any { it is StreamError })
+        }
+    }
+
+    @Test
+    fun `tolerates response incomplete payload with non object incomplete_details`() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "text/event-stream")
+                    .setBody(
+                        """
+                        data: {"type":"response.created","response":{"id":"resp_bad_incomplete"}}
+
+                        data: {"type":"response.incomplete","response":{"id":"resp_bad_incomplete","status":"incomplete","incomplete_details":[]}}
+
+                        """.trimIndent()
+                    )
+            )
+
+            val provider = OpenRouterProvider(
+                baseUrl = server.url("/api/v1/responses"),
+                apiKeyOverride = "test-key",
+            )
+
+            val events = provider.stream(request()).toList()
+            val completed = events.filterIsInstance<TurnCompleted>().single()
+
+            assertEquals(IlFinishReason.OTHER, completed.finishReason)
+            assertFalse(events.any { it is StreamError })
+        }
+    }
+
+    @Test
+    fun `tolerates error payload where error field is an array`() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "text/event-stream")
+                    .setBody(
+                        """
+                        data: {"type":"response.created","response":{"id":"resp_bad_error"}}
+
+                        data: {"type":"error","error":[]}
+
+                        """.trimIndent()
+                    )
+            )
+
+            val provider = OpenRouterProvider(
+                baseUrl = server.url("/api/v1/responses"),
+                apiKeyOverride = "test-key",
+            )
+
+            val events = provider.stream(request()).toList()
+
+            assertTrue(events.any { it is StreamError })
+        }
+    }
+
+    @Test
     fun `does not serialize assistant thinking blocks back into request history`() {
         val provider = OpenRouterProvider(
             baseUrl = "https://openrouter.ai/api/v1/responses".toHttpUrl(),
