@@ -21,14 +21,14 @@
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
     <depends>com.intellij.modules.compose</depends>
 
-    <resource-bundle>messages.MyMessageBundle</resource-bundle>
+    <resource-bundle>messages.AgentMessageBundle</resource-bundle>
 
     <!-- Extensions defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
         <iconMapper mappingFile="RadiumCodeIconMappings.json"/>
-        <toolWindow id="MyToolWindow"
-                    factoryClass="net.alkalines.radiumcode.MyToolWindowFactory"
+        <toolWindow id="AgentToolWindow"
+                    factoryClass="net.alkalines.radiumcode.AgentToolWindowFactory"
                     anchor="left"
                     icon="/META-INF/toolWindowIcon.svg"/>
     </extensions>
