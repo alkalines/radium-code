@@ -148,7 +148,7 @@ data class IlToolResultBlock(
     override val id: String,
     val callId: String,
     val toolName: String,
-    val resultJson: String,
+    val outputPayload: String,
     val isError: Boolean,
     override val status: IlBlockStatus,
     override val meta: IlMeta,
@@ -182,6 +182,34 @@ data class IlConversationTurn(
             id = id,
             role = IlRole.USER,
             blocks = listOf(IlTextBlock.completed("$id-text", text, meta)),
+            status = IlTurnStatus.COMPLETED,
+            usage = null,
+            finish = null,
+            willContinue = false,
+            meta = meta,
+        )
+
+        fun toolResult(
+            id: String,
+            callId: String,
+            toolName: String,
+            outputPayload: String,
+            isError: Boolean,
+            meta: IlMeta = IlMeta.openrouter("tool_result"),
+        ) = IlConversationTurn(
+            id = id,
+            role = IlRole.TOOL,
+            blocks = listOf(
+                IlToolResultBlock(
+                    id = "$id-output",
+                    callId = callId,
+                    toolName = toolName,
+                    outputPayload = outputPayload,
+                    isError = isError,
+                    status = IlBlockStatus.COMPLETED,
+                    meta = meta,
+                )
+            ),
             status = IlTurnStatus.COMPLETED,
             usage = null,
             finish = null,
@@ -316,7 +344,7 @@ data class ToolResultAdded(
     override val turnId: String,
     val callId: String,
     val toolName: String,
-    val resultJson: String,
+    val outputPayload: String,
     val isError: Boolean,
     override val meta: IlMeta,
 ) : IlStreamEvent

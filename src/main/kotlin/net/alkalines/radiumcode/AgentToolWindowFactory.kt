@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -54,6 +55,7 @@ import com.intellij.ui.JBColor
 import net.alkalines.radiumcode.agent.il.IlRole
 import net.alkalines.radiumcode.agent.providers.ProviderRegistry
 import net.alkalines.radiumcode.agent.runtime.AgentRuntime
+import net.alkalines.radiumcode.agent.runtime.SubmitPromptResult
 import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.jetbrains.jewel.bridge.addComposeTab
 import org.jetbrains.jewel.bridge.icon.fromPlatformIcon
@@ -66,10 +68,14 @@ class AgentToolWindowFactory : ToolWindowFactory {
     override fun shouldBeAvailable(project: Project) = true
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        toolWindow.addComposeTab("", focusOnClickInside = true) {
+        toolWindow.addComposeTab(AgentToolWindowChrome.composeTabTitle(), focusOnClickInside = true) {
             AgentToolWindowContent()
         }
     }
+}
+
+internal object AgentToolWindowChrome {
+    fun composeTabTitle(): String? = null
 }
 
 internal object AgentToolWindowLayout {
@@ -96,10 +102,11 @@ private fun AgentToolWindowContent() {
     val inputColor = rememberThemeColor("EditorPane.inactiveBackground", 0xFFF4F5F7.toInt(), 0xFF313336.toInt())
     val borderColor = rememberThemeColor("Borders.ContrastBorderColor", 0xFFD8DCE3.toInt(), 0xFF454A4F.toInt())
     val placeholderColor = rememberThemeColor("TextField.placeholderForeground", 0xFF7A8088.toInt(), 0xFF8B9098.toInt())
+    val errorColor = rememberThemeColor("ValidationTooltip.errorForeground", 0xFFB3261E.toInt(), 0xFFFFB4AB.toInt())
     val textColor = rememberThemeColor("Label.foreground", 0xFF1F2329.toInt(), 0xFFDFE1E5.toInt())
     val menuSurfaceColor = rememberThemeColor("PopupMenu.background", 0xFFF7F8FA.toInt(), 0xFF2F3136.toInt())
     val selectedRowColor = rememberThemeColor("Toolbar.Dropdown.background", 0xFF3F4247.toInt(), 0xFF4A4D52.toInt())
-    val sendEnabled = prompt.isNotBlank()
+    val sendEnabled = prompt.isNotBlank() && !state.isStreaming && state.hasUsableSelection
     val sendBackground = if (sendEnabled) {
         rememberThemeColor("Button.default.startBackground", 0xFF3574F0.toInt(), 0xFF548AF7.toInt())
     } else {
@@ -108,7 +115,7 @@ private fun AgentToolWindowContent() {
     val sendContentColor = if (sendEnabled) Color.White else placeholderColor
     val bottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val menuWidth = 220.dp
-    val menuHeight = (modelOptions.size * 42 + 40).dp
+    val menuHeight = minOf(modelOptions.size * 42 + 40, 280).dp
     val menuGap = 8.dp
     val density = androidx.compose.ui.platform.LocalDensity.current
     val menuWidthPx = with(density) { menuWidth.roundToPx() }
@@ -146,6 +153,7 @@ private fun AgentToolWindowContent() {
                     .background(menuSurfaceColor)
                     .border(1.dp, borderColor, RoundedCornerShape(14.dp))
                     .padding(vertical = 6.dp)
+                    .verticalScroll(rememberScrollState())
             ) {
                 Text(
                     AgentMessageBundle.message("toolwindow.AgentToolWindow.modelMenu"),
@@ -191,7 +199,10 @@ private fun AgentToolWindowContent() {
             val chatScrollState = rememberScrollState()
             val chatLengthSignal = AgentToolWindowPresenter.autoScrollSignal(chatItems)
             LaunchedEffect(chatLengthSignal) {
-                chatScrollState.scrollTo(chatScrollState.maxValue)
+                val distanceFromBottom = chatScrollState.maxValue - chatScrollState.value
+                if (distanceFromBottom <= 64) {
+                    chatScrollState.scrollTo(chatScrollState.maxValue)
+                }
             }
             Column(
                 modifier = Modifier
@@ -278,6 +289,13 @@ private fun AgentToolWindowContent() {
                         }
                     }
                 )
+                state.inlineError?.let { message ->
+                    Text(
+                        message,
+                        style = TextStyle(color = errorColor, fontSize = 13.sp, lineHeight = 18.sp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -329,8 +347,9 @@ private fun AgentToolWindowContent() {
                                 indication = null,
                                 interactionSource = remember { MutableInteractionSource() }
                             ) {
-                                runtime.submitPrompt(prompt)
-                                prompt = ""
+                                if (runtime.submitPrompt(prompt) == SubmitPromptResult.ACCEPTED) {
+                                    prompt = ""
+                                }
                             },
                         contentAlignment = Alignment.Center
                     ) {

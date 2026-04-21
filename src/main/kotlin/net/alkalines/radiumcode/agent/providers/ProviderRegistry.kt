@@ -13,10 +13,12 @@ class ProviderRegistry private constructor(
     val defaultModel = allModels.firstOrNull { it.isDefault } ?: allModels.firstOrNull()
 
     fun provider(providerId: String): AgentProvider = providers.first { it.providerId == providerId }
+    fun providerOrNull(providerId: String): AgentProvider? = providers.firstOrNull { it.providerId == providerId }
+    fun model(providerId: String, modelId: String) = allModels.firstOrNull { it.providerId == providerId && it.modelId == modelId }
 
     companion object {
         private val logger = Logger.getInstance(ProviderRegistry::class.java)
-        private val extensionPointName = ExtensionPointName.create<AgentProviderBean>("net.alkalines.radiumcode.agentProvider")
+        private val extensionPointName = ExtensionPointName<AgentProviderBean>("net.alkalines.radiumcode.agentProvider")
 
         val lazyInstance: ProviderRegistry by lazy {
             fromProviders(extensionPointName.extensionList.map { it.instantiate() })

@@ -1,17 +1,15 @@
 package net.alkalines.radiumcode.agent.providers
 
-import kotlin.test.Test
-import kotlin.test.assertContains
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import net.alkalines.radiumcode.agent.il.IlConversationTurn
 import net.alkalines.radiumcode.agent.il.IlFinishReason
@@ -20,15 +18,25 @@ import net.alkalines.radiumcode.agent.il.IlRole
 import net.alkalines.radiumcode.agent.il.IlTextBlock
 import net.alkalines.radiumcode.agent.il.IlThinkingBlock
 import net.alkalines.radiumcode.agent.il.IlThinkingVisibility
+import net.alkalines.radiumcode.agent.il.IlToolCallBlock
+import net.alkalines.radiumcode.agent.il.IlToolChoice
+import net.alkalines.radiumcode.agent.il.IlToolDefinition
+import net.alkalines.radiumcode.agent.il.IlToolResultBlock
 import net.alkalines.radiumcode.agent.il.IlTurnError
 import net.alkalines.radiumcode.agent.il.IlTurnStatus
+import net.alkalines.radiumcode.agent.il.StreamError
+import net.alkalines.radiumcode.agent.il.TurnCompleted
+import net.alkalines.radiumcode.agent.il.TurnStarted
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import java.util.concurrent.TimeUnit
-import net.alkalines.radiumcode.agent.il.StreamError
-import net.alkalines.radiumcode.agent.il.TurnCompleted
-import net.alkalines.radiumcode.agent.il.TurnStarted
+import kotlin.test.Test
+import kotlin.test.assertContains
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class OpenRouterProviderTest {
 
@@ -44,6 +52,18 @@ class OpenRouterProviderTest {
         val provider = OpenRouterProvider(
             baseUrl = "https://openrouter.ai/api/v1/responses".toHttpUrl(),
             apiKeyOverride = "",
+        )
+
+        val events = provider.stream(request()).toList()
+
+        assertTrue(events.first() is TurnStarted)
+        assertTrue(events.last() is StreamError)
+    }
+
+    @Test
+    fun `returns stream error without http when no override and no default api key exist`() = runBlocking {
+        val provider = OpenRouterProvider(
+            baseUrl = "https://openrouter.ai/api/v1/responses".toHttpUrl(),
         )
 
         val events = provider.stream(request()).toList()
@@ -434,6 +454,330 @@ class OpenRouterProviderTest {
     }
 
     @Test
+    fun `serializes tools parallel tool calls and function call outputs in replay history`() {
+        val provider = OpenRouterProvider(
+            baseUrl = "https://openrouter.ai/api/v1/responses".toHttpUrl(),
+            apiKeyOverride = "test-key",
+        )
+
+        val request = net.alkalines.radiumcode.agent.il.IlGenerateRequest(
+            providerId = "openrouter",
+            modelId = "z-ai/glm-4.5-air:free",
+            input = listOf(
+                IlConversationTurn.userText(id = "user-1", text = "Lookup"),
+                IlConversationTurn(
+                    id = "assistant-call",
+                    role = IlRole.ASSISTANT,
+                    blocks = listOf(
+                        IlToolCallBlock(
+                            id = "call-block",
+                            callId = "call-1",
+                            toolName = "lookup",
+                            argumentsJson = "{\"query\":\"hello\"}",
+                            status = net.alkalines.radiumcode.agent.il.IlBlockStatus.COMPLETED,
+                            meta = IlMeta.openrouter("tool_call")
+                        )
+                    ),
+                    status = IlTurnStatus.COMPLETED,
+                    usage = null,
+                    finish = null,
+                    willContinue = true,
+                    meta = IlMeta.openrouter("assistant")
+                ),
+                IlConversationTurn(
+                    id = "tool-turn",
+                    role = IlRole.TOOL,
+                    blocks = listOf(
+                        IlToolResultBlock(
+                            id = "fc_output_1",
+                            callId = "call-1",
+                            toolName = "lookup",
+                            outputPayload = """{"ok":true}""",
+                            isError = false,
+                            status = net.alkalines.radiumcode.agent.il.IlBlockStatus.COMPLETED,
+                            meta = IlMeta.openrouter("tool_result")
+                        )
+                    ),
+                    status = IlTurnStatus.COMPLETED,
+                    usage = null,
+                    finish = null,
+                    willContinue = false,
+                    meta = IlMeta.openrouter("tool")
+                ),
+            ),
+            tools = listOf(
+                IlToolDefinition(
+                    name = "lookup",
+                    description = "Lookup data",
+                    inputSchema = buildJsonObject {
+                        put("type", "object")
+                    }
+                )
+            ),
+            toolChoice = IlToolChoice.Required,
+            allowParallelToolCalls = true,
+            maxOutputTokens = 128,
+            temperature = null,
+            topP = null,
+            stopSequences = emptyList(),
+            continuation = null,
+            metadata = buildJsonObject { put("source", "test") },
+            providerOptions = buildJsonObject { }
+        )
+
+        val body = provider.buildRequestBody(request).toString()
+        val expectedSnippet = fixture("request-with-tool-replay.json")
+
+        assertContains(body, expectedSnippet)
+    }
+
+    @Test
+    fun `does not append an empty assistant message when replaying a tool only turn`() {
+        val provider = OpenRouterProvider(
+            baseUrl = "https://openrouter.ai/api/v1/responses".toHttpUrl(),
+            apiKeyOverride = "test-key",
+        )
+
+        val request = net.alkalines.radiumcode.agent.il.IlGenerateRequest(
+            providerId = "openrouter",
+            modelId = "z-ai/glm-4.5-air:free",
+            input = listOf(
+                IlConversationTurn.userText(id = "user-1", text = "Lookup"),
+                IlConversationTurn(
+                    id = "assistant-call",
+                    role = IlRole.ASSISTANT,
+                    blocks = listOf(
+                        IlToolCallBlock(
+                            id = "call-block",
+                            callId = "call-1",
+                            toolName = "lookup",
+                            argumentsJson = "{\"query\":\"hello\"}",
+                            status = net.alkalines.radiumcode.agent.il.IlBlockStatus.COMPLETED,
+                            meta = IlMeta.openrouter("tool_call")
+                        )
+                    ),
+                    status = IlTurnStatus.COMPLETED,
+                    usage = null,
+                    finish = null,
+                    willContinue = true,
+                    meta = IlMeta.openrouter("assistant")
+                ),
+            ),
+            tools = emptyList(),
+            toolChoice = IlToolChoice.None,
+            allowParallelToolCalls = false,
+            maxOutputTokens = 128,
+            temperature = null,
+            topP = null,
+            stopSequences = emptyList(),
+            continuation = null,
+            metadata = buildJsonObject { put("source", "test") },
+            providerOptions = buildJsonObject { }
+        )
+
+        val body = provider.buildRequestBody(request).toString()
+
+        assertContains(body, "\"type\":\"function_call\"")
+        assertFalse(body.contains("\"id\":\"assistant-call\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[]"))
+    }
+
+    @Test
+    fun `does not enable reasoning when the selected model is not known to support it`() {
+        val provider = OpenRouterProvider(
+            baseUrl = "https://openrouter.ai/api/v1/responses".toHttpUrl(),
+            apiKeyOverride = "test-key",
+        )
+
+        val request = request().copy(modelId = "unknown-model")
+
+        val body = provider.buildRequestBody(request).toString()
+
+        assertFalse(body.contains("\"reasoning\":{\"enabled\":true}"))
+    }
+
+    @Test
+    fun `does not serialize tool metadata for models without tool calling support`() {
+        val provider = OpenRouterProvider(
+            baseUrl = "https://openrouter.ai/api/v1/responses".toHttpUrl(),
+            apiKeyOverride = "test-key",
+        )
+
+        val request = net.alkalines.radiumcode.agent.il.IlGenerateRequest(
+            providerId = "openrouter",
+            modelId = "unknown-model",
+            input = listOf(IlConversationTurn.userText(id = "user-1", text = "Hello")),
+            tools = listOf(
+                IlToolDefinition(
+                    name = "lookup",
+                    description = "Lookup data",
+                    inputSchema = buildJsonObject {
+                        put("type", "object")
+                    }
+                )
+            ),
+            toolChoice = IlToolChoice.Required,
+            allowParallelToolCalls = true,
+            maxOutputTokens = 128,
+            temperature = null,
+            topP = null,
+            stopSequences = emptyList(),
+            continuation = null,
+            metadata = buildJsonObject { put("source", "test") },
+            providerOptions = buildJsonObject { }
+        )
+
+        val body = provider.buildRequestBody(request).toString()
+
+        assertFalse(body.contains("\"tools\":"))
+        assertFalse(body.contains("\"tool_choice\""))
+        assertFalse(body.contains("\"parallel_tool_calls\""))
+    }
+
+    @Test
+    fun `preserves assistant block order when replaying mixed text and tool call history`() {
+        val provider = OpenRouterProvider(
+            baseUrl = "https://openrouter.ai/api/v1/responses".toHttpUrl(),
+            apiKeyOverride = "test-key",
+        )
+
+        val request = request(
+            assistantBlocks = listOf(
+                IlTextBlock.completed(id = "text-before", text = "Before"),
+                IlToolCallBlock(
+                    id = "call-after-text",
+                    callId = "call-1",
+                    toolName = "lookup",
+                    argumentsJson = "{\"query\":\"hello\"}",
+                    status = net.alkalines.radiumcode.agent.il.IlBlockStatus.COMPLETED,
+                    meta = IlMeta.openrouter("tool_call"),
+                )
+            )
+        )
+
+        val body = provider.buildRequestBody(request).toString()
+
+        assertTrue(body.indexOf("\"text\":\"Before\"") < body.indexOf("\"id\":\"call-after-text\""))
+    }
+
+    @Test
+    fun `assigns unique message ids when replaying split assistant text around a tool call`() {
+        val provider = OpenRouterProvider(
+            baseUrl = "https://openrouter.ai/api/v1/responses".toHttpUrl(),
+            apiKeyOverride = "test-key",
+        )
+
+        val body = provider.buildRequestBody(
+            request(
+                assistantBlocks = listOf(
+                    IlTextBlock.completed(id = "text-before", text = "Before"),
+                    IlToolCallBlock(
+                        id = "call-middle",
+                        callId = "call-1",
+                        toolName = "lookup",
+                        argumentsJson = "{\"query\":\"hello\"}",
+                        status = net.alkalines.radiumcode.agent.il.IlBlockStatus.COMPLETED,
+                        meta = IlMeta.openrouter("tool_call"),
+                    ),
+                    IlTextBlock.completed(id = "text-after", text = "After"),
+                )
+            )
+        )
+
+        val input = Json.parseToJsonElement(body.toString()).jsonObject["input"]!!.jsonArray
+        val assistantMessages = input.filter { item ->
+            item.jsonObject["type"]?.jsonPrimitive?.content == "message" &&
+                item.jsonObject["role"]?.jsonPrimitive?.content == "assistant"
+        }
+
+        assertEquals(2, assistantMessages.size)
+        assertEquals(
+            listOf("assistant-1", "assistant-1-msg-1"),
+            assistantMessages.map { it.jsonObject["id"]!!.jsonPrimitive.content }
+        )
+        assertEquals("Before", assistantMessages[0].jsonObject["content"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals("After", assistantMessages[1].jsonObject["content"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `preserves system and developer turns when replaying history`() {
+        val provider = OpenRouterProvider(
+            baseUrl = "https://openrouter.ai/api/v1/responses".toHttpUrl(),
+            apiKeyOverride = "test-key",
+        )
+
+        val request = net.alkalines.radiumcode.agent.il.IlGenerateRequest(
+            providerId = "openrouter",
+            modelId = "z-ai/glm-4.5-air:free",
+            input = listOf(
+                textTurn(id = "system-1", role = IlRole.SYSTEM, text = "You are strict"),
+                textTurn(id = "developer-1", role = IlRole.DEVELOPER, text = "Reply in English"),
+                IlConversationTurn.userText(id = "user-1", text = "Hello"),
+            ),
+            tools = emptyList(),
+            toolChoice = IlToolChoice.None,
+            allowParallelToolCalls = false,
+            maxOutputTokens = 128,
+            temperature = null,
+            topP = null,
+            stopSequences = emptyList(),
+            continuation = null,
+            metadata = buildJsonObject { put("source", "test") },
+            providerOptions = buildJsonObject { }
+        )
+
+        val input = provider.buildRequestBody(request)["input"]!!.jsonArray
+
+        assertEquals(listOf("system", "developer", "user"), input.map { it.jsonObject["role"]!!.jsonPrimitive.content })
+        assertEquals("You are strict", input[0].jsonObject["content"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals("Reply in English", input[1].jsonObject["content"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `parses multiline sse events as a single payload`() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "text/event-stream")
+                    .setBody(fixture("multiline-sse-event.txt"))
+            )
+
+            val provider = OpenRouterProvider(
+                baseUrl = server.url("/api/v1/responses"),
+                apiKeyOverride = "test-key",
+            )
+
+            val events = provider.stream(request()).toList()
+            val started = assertIs<TurnStarted>(events.first())
+
+            assertEquals("resp_multiline", started.turnId)
+        }
+    }
+
+    @Test
+    fun `parses sse events whose lines are split across transport chunks`() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "text/event-stream")
+                    .setChunkedBody(fixture("fragmented-sse-event.txt"), 7)
+            )
+
+            val provider = OpenRouterProvider(
+                baseUrl = server.url("/api/v1/responses"),
+                apiKeyOverride = "test-key",
+            )
+
+            val events = provider.stream(request()).toList()
+            val completed = assertIs<TurnCompleted>(events.last())
+
+            assertEquals("resp_fragmented", completed.turnId)
+            assertEquals(IlFinishReason.STOP, completed.finishReason)
+        }
+    }
+
+    @Test
     fun `skips failed assistant turns with empty content when serializing history`() {
         val provider = OpenRouterProvider(
             baseUrl = "https://openrouter.ai/api/v1/responses".toHttpUrl(),
@@ -507,4 +851,20 @@ class OpenRouterProviderTest {
         metadata = buildJsonObject { put("source", "test") },
         providerOptions = buildJsonObject { }
     )
+
+    private fun textTurn(id: String, role: IlRole, text: String) = IlConversationTurn(
+        id = id,
+        role = role,
+        blocks = listOf(IlTextBlock.completed(id = "$id-text", text = text)),
+        status = IlTurnStatus.COMPLETED,
+        usage = null,
+        finish = null,
+        willContinue = false,
+        meta = IlMeta.openrouter(role.name.lowercase()),
+    )
+
+    private fun fixture(name: String): String =
+        checkNotNull(javaClass.getResource("/net/alkalines/radiumcode/agent/providers/openrouter/$name")) {
+            "Missing fixture $name"
+        }.readText().trim()
 }

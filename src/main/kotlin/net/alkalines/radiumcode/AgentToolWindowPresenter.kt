@@ -45,7 +45,7 @@ object AgentToolWindowPresenter {
                     is IlTextBlock -> add(AgentChatItem(turn.role, block.text, AgentChatItem.Kind.TEXT, turn.role.alignment()))
                     is IlThinkingBlock -> add(AgentChatItem(turn.role, block.text, AgentChatItem.Kind.THINKING, turn.role.alignment()))
                     is IlToolCallBlock -> add(AgentChatItem(turn.role, block.toolName ?: "Tool call", AgentChatItem.Kind.TOOL, turn.role.alignment()))
-                    is IlToolResultBlock -> add(AgentChatItem(turn.role, block.resultJson, AgentChatItem.Kind.TOOL, turn.role.alignment()))
+                    is IlToolResultBlock -> add(AgentChatItem(turn.role, block.outputPayload, AgentChatItem.Kind.TOOL, turn.role.alignment()))
                     is IlRefusalBlock -> add(AgentChatItem(turn.role, block.text, AgentChatItem.Kind.ERROR, turn.role.alignment()))
                     else -> Unit
                 }

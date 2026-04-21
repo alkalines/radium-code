@@ -1,7 +1,6 @@
 {
   "META-INF": {
-    "expui": {
-      "toolWindowIcon.svg": "META-INF/toolWindowIcon.svg"
-    }
+    "toolWindowIcon.svg": "META-INF/expui/toolWindowIcon.svg",
+    "toolWindowIcon_dark.svg": "META-INF/expui/toolWindowIcon_dark.svg"
   }
 }

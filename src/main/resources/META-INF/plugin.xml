@@ -5,16 +5,15 @@
 
     <!-- Public plugin name should be written in Title Case.
      Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-name -->
-    <name>Radium-code</name>
+    <name>Radium Code</name>
 
     <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
-    <vendor url="https://www.yourcompany.com">YourCompany</vendor>
+    <vendor url="https://github.com/alkalines/radium-code">Alkalines</vendor>
 
     <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
     <description><![CDATA[
-        Enter short description for your plugin here.<br>
-        <em>most HTML tags may be used</em>
+        Radium Code is an IDE-native AI agent for JetBrains IDEs that keeps the conversation close to project context, model streaming, and future tool use inside the tool window.
         ]]></description>
 
     <!-- Product and plugin compatibility requirements.
@@ -32,6 +31,7 @@
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
         <iconMapper mappingFile="RadiumCodeIconMappings.json"/>
+        <notificationGroup id="Radium Code" displayType="BALLOON" isLogByDefault="true"/>
         <toolWindow id="AgentToolWindow"
                     factoryClass="net.alkalines.radiumcode.AgentToolWindowFactory"
                     anchor="left"

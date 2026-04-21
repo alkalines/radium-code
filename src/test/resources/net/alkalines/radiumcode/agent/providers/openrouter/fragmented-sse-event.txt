@@ -1,0 +1,4 @@
+data: {"type":"response.created","response":{"id":"resp_fragmented"}}
+
+data: {"type":"response.completed","response":{"id":"resp_fragmented","status":"completed","output":[]}}
+
