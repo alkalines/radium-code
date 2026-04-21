@@ -52,7 +52,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
-private const val OPENROUTER_API_KEY = "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" // TODO: configure a key outside source control or pass apiKeyOverride in tests
+private const val OPENROUTER_API_KEY = "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" // TODO: configure a key outside source control or pass apiKeyOverride in tests
 
 internal fun openRouterHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(30, TimeUnit.SECONDS)

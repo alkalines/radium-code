@@ -98,4 +98,20 @@ class AgentToolWindowFactoryTest {
             submittedPromptValue(prompt = TextFieldValue("hello"), result = SubmitPromptResult.REJECTED_BLANK)
         )
     }
+
+    @Test
+    fun `shows stop in the trailing composer slot while streaming`() {
+        assertEquals(
+            ComposerTrailingButton.STOP,
+            composerTrailingButton(isStreaming = true)
+        )
+    }
+
+    @Test
+    fun `shows send in the trailing composer slot when streaming ends`() {
+        assertEquals(
+            ComposerTrailingButton.SEND,
+            composerTrailingButton(isStreaming = false)
+        )
+    }
 }

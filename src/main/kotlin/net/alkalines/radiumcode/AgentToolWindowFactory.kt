@@ -89,6 +89,11 @@ internal object AgentToolWindowLayout {
     fun showConversationContainerChrome(): Boolean = false
 }
 
+internal enum class ComposerTrailingButton {
+    SEND,
+    STOP
+}
+
 @Composable
 @Preview
 private fun AgentToolWindowContent() {
@@ -114,6 +119,7 @@ private fun AgentToolWindowContent() {
     val menuSurfaceColor = rememberThemeColor("PopupMenu.background", 0xFFF7F8FA.toInt(), 0xFF2F3136.toInt())
     val selectedRowColor = rememberThemeColor("Toolbar.Dropdown.background", 0xFF3F4247.toInt(), 0xFF4A4D52.toInt())
     val sendEnabled = prompt.text.isNotBlank() && !state.isStreaming && state.hasUsableSelection
+    val trailingButton = composerTrailingButton(isStreaming = state.isStreaming)
     val sendBackground = if (sendEnabled) {
         rememberThemeColor("Button.default.startBackground", 0xFF3574F0.toInt(), 0xFF548AF7.toInt())
     } else {
@@ -136,7 +142,6 @@ private fun AgentToolWindowContent() {
     val stopIcon = remember { IntelliJIconKey.fromPlatformIcon(AllIcons.Actions.Suspend) }
     val expandIcon = remember { IntelliJIconKey.fromPlatformIcon(AllIcons.General.ArrowDown) }
     val checkIcon = remember { IntelliJIconKey.fromPlatformIcon(AllIcons.Actions.Checked) }
-    val isStreaming = state.isStreaming
     val submitPrompt = {
         prompt = submittedPromptValue(prompt, runtime.submitPrompt(prompt.text))
     }
@@ -339,42 +344,40 @@ private fun AgentToolWindowContent() {
                         onClick = { modelMenuExpanded = !modelMenuExpanded },
                         trailing = AgentMessageBundle.message("toolwindow.AgentToolWindow.expand")
                     )
-                    if (isStreaming) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .background(inputColor, CircleShape)
-                                .border(1.dp, borderColor, CircleShape)
-                                .clickable(
-                                    indication = null,
-                                    interactionSource = remember { MutableInteractionSource() }
-                                ) { runtime.cancelActiveTurn() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                key = stopIcon,
-                                contentDescription = AgentMessageBundle.message("toolwindow.AgentToolWindow.stop"),
-                                modifier = Modifier.size(16.dp),
-                                tint = textColor
-                            )
-                        }
-                    }
                     Box(
                         modifier = Modifier
                             .size(36.dp)
-                            .background(sendBackground, CircleShape)
+                            .background(if (trailingButton == ComposerTrailingButton.STOP) inputColor else sendBackground, CircleShape)
+                            .then(
+                                if (trailingButton == ComposerTrailingButton.STOP) {
+                                    Modifier.border(1.dp, borderColor, CircleShape)
+                                } else {
+                                    Modifier
+                                }
+                            )
                             .clickable(
-                                enabled = sendEnabled,
+                                enabled = trailingButton == ComposerTrailingButton.STOP || sendEnabled,
                                 indication = null,
                                 interactionSource = remember { MutableInteractionSource() }
-                            ) { submitPrompt() },
+                            ) {
+                                when (trailingButton) {
+                                    ComposerTrailingButton.SEND -> submitPrompt()
+                                    ComposerTrailingButton.STOP -> runtime.cancelActiveTurn()
+                                }
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            key = sendIcon,
-                            contentDescription = AgentMessageBundle.message("toolwindow.AgentToolWindow.send"),
+                            key = if (trailingButton == ComposerTrailingButton.STOP) stopIcon else sendIcon,
+                            contentDescription = AgentMessageBundle.message(
+                                if (trailingButton == ComposerTrailingButton.STOP) {
+                                    "toolwindow.AgentToolWindow.stop"
+                                } else {
+                                    "toolwindow.AgentToolWindow.send"
+                                }
+                            ),
                             modifier = Modifier.size(16.dp),
-                            tint = sendContentColor
+                            tint = if (trailingButton == ComposerTrailingButton.STOP) textColor else sendContentColor
                         )
                     }
                 }
@@ -396,6 +399,13 @@ internal fun shouldInsertLineBreakFromKeyEvent(
     type: KeyEventType,
     isShiftPressed: Boolean,
 ): Boolean = prompt.composition == null && key == Key.Enter && type == KeyEventType.KeyDown && isShiftPressed
+
+internal fun composerTrailingButton(isStreaming: Boolean): ComposerTrailingButton =
+    if (isStreaming) {
+        ComposerTrailingButton.STOP
+    } else {
+        ComposerTrailingButton.SEND
+    }
 
 internal fun insertedLineBreakPromptValue(prompt: TextFieldValue): TextFieldValue {
     val selectionStart = minOf(prompt.selection.start, prompt.selection.end)
