@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,15 +32,23 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -91,7 +98,7 @@ private fun AgentToolWindowContent() {
     val chatItems = AgentToolWindowPresenter.chatItems(state.session)
     val modelOptions = remember(registry.allModels) { registry.allModels.map { it.modelId } }
     val selectedModel = state.selectedModelId ?: AgentToolWindowPresenter.modelLabel(registry)
-    var prompt by remember { mutableStateOf("") }
+    var prompt by remember { mutableStateOf(TextFieldValue("")) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
     var selectorXpx by remember { mutableIntStateOf(0) }
     var selectorYpx by remember { mutableIntStateOf(0) }
@@ -106,7 +113,7 @@ private fun AgentToolWindowContent() {
     val textColor = rememberThemeColor("Label.foreground", 0xFF1F2329.toInt(), 0xFFDFE1E5.toInt())
     val menuSurfaceColor = rememberThemeColor("PopupMenu.background", 0xFFF7F8FA.toInt(), 0xFF2F3136.toInt())
     val selectedRowColor = rememberThemeColor("Toolbar.Dropdown.background", 0xFF3F4247.toInt(), 0xFF4A4D52.toInt())
-    val sendEnabled = prompt.isNotBlank() && !state.isStreaming && state.hasUsableSelection
+    val sendEnabled = prompt.text.isNotBlank() && !state.isStreaming && state.hasUsableSelection
     val sendBackground = if (sendEnabled) {
         rememberThemeColor("Button.default.startBackground", 0xFF3574F0.toInt(), 0xFF548AF7.toInt())
     } else {
@@ -130,6 +137,9 @@ private fun AgentToolWindowContent() {
     val expandIcon = remember { IntelliJIconKey.fromPlatformIcon(AllIcons.General.ArrowDown) }
     val checkIcon = remember { IntelliJIconKey.fromPlatformIcon(AllIcons.Actions.Checked) }
     val isStreaming = state.isStreaming
+    val submitPrompt = {
+        prompt = submittedPromptValue(prompt, runtime.submitPrompt(prompt.text))
+    }
 
     Box(
         modifier = Modifier
@@ -271,7 +281,18 @@ private fun AgentToolWindowContent() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 96.dp, max = 160.dp)
-                        .verticalScroll(rememberScrollState()),
+                        .verticalScroll(rememberScrollState())
+                        .onPreviewKeyEvent { event ->
+                            if (shouldSubmitPromptFromKeyEvent(prompt, event.key, event.type, event.isShiftPressed)) {
+                                submitPrompt()
+                                true
+                            } else if (shouldInsertLineBreakFromKeyEvent(prompt, event.key, event.type, event.isShiftPressed)) {
+                                prompt = insertedLineBreakPromptValue(prompt)
+                                true
+                            } else {
+                                false
+                            }
+                        },
                     decorationBox = { innerTextField ->
                         Box(
                             modifier = Modifier
@@ -279,7 +300,7 @@ private fun AgentToolWindowContent() {
                                 .background(inputColor, RoundedCornerShape(18.dp))
                                 .padding(horizontal = 16.dp, vertical = 14.dp)
                         ) {
-                            if (prompt.isEmpty()) {
+                            if (prompt.text.isEmpty()) {
                                 Text(
                                     AgentMessageBundle.message("toolwindow.AgentToolWindow.placeholder"),
                                     style = TextStyle(color = placeholderColor, fontSize = 15.sp)
@@ -346,11 +367,7 @@ private fun AgentToolWindowContent() {
                                 enabled = sendEnabled,
                                 indication = null,
                                 interactionSource = remember { MutableInteractionSource() }
-                            ) {
-                                if (runtime.submitPrompt(prompt) == SubmitPromptResult.ACCEPTED) {
-                                    prompt = ""
-                                }
-                            },
+                            ) { submitPrompt() },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
@@ -365,6 +382,37 @@ private fun AgentToolWindowContent() {
         }
     }
 }
+
+internal fun shouldSubmitPromptFromKeyEvent(
+    prompt: TextFieldValue,
+    key: Key,
+    type: KeyEventType,
+    isShiftPressed: Boolean,
+): Boolean = prompt.composition == null && key == Key.Enter && type == KeyEventType.KeyDown && !isShiftPressed
+
+internal fun shouldInsertLineBreakFromKeyEvent(
+    prompt: TextFieldValue,
+    key: Key,
+    type: KeyEventType,
+    isShiftPressed: Boolean,
+): Boolean = prompt.composition == null && key == Key.Enter && type == KeyEventType.KeyDown && isShiftPressed
+
+internal fun insertedLineBreakPromptValue(prompt: TextFieldValue): TextFieldValue {
+    val selectionStart = minOf(prompt.selection.start, prompt.selection.end)
+    val selectionEnd = maxOf(prompt.selection.start, prompt.selection.end)
+    val updatedText = buildString {
+        append(prompt.text.substring(0, selectionStart))
+        append('\n')
+        append(prompt.text.substring(selectionEnd))
+    }
+    return TextFieldValue(
+        text = updatedText,
+        selection = TextRange(selectionStart + 1)
+    )
+}
+
+internal fun submittedPromptValue(prompt: TextFieldValue, result: SubmitPromptResult): TextFieldValue =
+    if (result == SubmitPromptResult.ACCEPTED) TextFieldValue("") else prompt
 
 @Composable
 private fun ToolbarChip(
