@@ -1,5 +1,13 @@
 package net.alkalines.radiumcode
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,6 +34,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -35,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
@@ -141,7 +151,9 @@ private fun AgentToolWindowContent() {
     }
     val stopIcon = remember { IntelliJIconKey.fromPlatformIcon(AllIcons.Actions.Suspend) }
     val expandIcon = remember { IntelliJIconKey.fromPlatformIcon(AllIcons.General.ArrowDown) }
+    val thinkingChevronIcon = remember { IntelliJIconKey.fromPlatformIcon(AllIcons.General.ChevronRight) }
     val checkIcon = remember { IntelliJIconKey.fromPlatformIcon(AllIcons.Actions.Checked) }
+    var expandedThinkingItems by remember { mutableStateOf(emptySet<String>()) }
     val submitPrompt = {
         prompt = submittedPromptValue(prompt, runtime.submitPrompt(prompt.text))
     }
@@ -261,11 +273,23 @@ private fun AgentToolWindowContent() {
                             AgentChatItem.Kind.TOOL -> placeholderColor
                             AgentChatItem.Kind.TEXT -> textColor
                         }
-                        val fontStyle = if (AgentToolWindowPresenter.shouldItalicize(item.kind)) FontStyle.Italic else FontStyle.Normal
-                        Text(
-                            item.text,
-                            style = TextStyle(color = plainTextColor, fontSize = 14.sp, lineHeight = 22.sp, fontStyle = fontStyle)
-                        )
+                        if (item.kind == AgentChatItem.Kind.THINKING) {
+                            ThinkingMessage(
+                                item = item,
+                                textColor = plainTextColor,
+                                chevronIcon = thinkingChevronIcon,
+                                isExpanded = isThinkingExpanded(expandedThinkingItems, item.id),
+                                onToggle = {
+                                    expandedThinkingItems = toggledThinkingItemExpansion(expandedThinkingItems, item.id)
+                                }
+                            )
+                        } else {
+                            val fontStyle = if (AgentToolWindowPresenter.shouldItalicize(item.kind)) FontStyle.Italic else FontStyle.Normal
+                            Text(
+                                item.text,
+                                style = TextStyle(color = plainTextColor, fontSize = 14.sp, lineHeight = 22.sp, fontStyle = fontStyle)
+                            )
+                        }
                     }
                 }
             }
@@ -423,6 +447,80 @@ internal fun insertedLineBreakPromptValue(prompt: TextFieldValue): TextFieldValu
 
 internal fun submittedPromptValue(prompt: TextFieldValue, result: SubmitPromptResult): TextFieldValue =
     if (result == SubmitPromptResult.ACCEPTED) TextFieldValue("") else prompt
+
+internal fun isThinkingExpanded(expandedItems: Set<String>, itemId: String): Boolean = itemId in expandedItems
+
+internal fun toggledThinkingItemExpansion(expandedItems: Set<String>, itemId: String): Set<String> =
+    if (itemId in expandedItems) expandedItems - itemId else expandedItems + itemId
+
+internal fun thinkingChevronRotation(isExpanded: Boolean): Float = if (isExpanded) 90f else 0f
+
+internal fun shouldAnimateThinkingExpansion(wasExpanded: Boolean, isExpanded: Boolean): Boolean =
+    !wasExpanded && isExpanded
+
+@Composable
+private fun ThinkingMessage(
+    item: AgentChatItem,
+    textColor: Color,
+    chevronIcon: IconKey,
+    isExpanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    val chevronRotation by animateFloatAsState(
+        targetValue = thinkingChevronRotation(isExpanded),
+        animationSpec = tween(durationMillis = 180),
+        label = "thinkingChevronRotation"
+    )
+    var wasExpanded by remember(item.id) { mutableStateOf(false) }
+    val shouldAnimateExpansion = shouldAnimateThinkingExpansion(wasExpanded = wasExpanded, isExpanded = isExpanded)
+    SideEffect {
+        wasExpanded = isExpanded
+    }
+    Column(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() },
+                    onClick = onToggle
+                )
+                .padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                AgentMessageBundle.message("toolwindow.AgentToolWindow.thinking"),
+                style = TextStyle(color = textColor, fontSize = 14.sp, lineHeight = 20.sp)
+            )
+            Icon(
+                key = chevronIcon,
+                contentDescription = AgentMessageBundle.message("toolwindow.AgentToolWindow.expand"),
+                modifier = Modifier
+                    .size(14.dp)
+                    .graphicsLayer { rotationZ = chevronRotation },
+                tint = textColor
+            )
+        }
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = if (shouldAnimateExpansion) {
+                expandVertically(animationSpec = tween(durationMillis = 180)) + fadeIn(animationSpec = tween(durationMillis = 120))
+            } else {
+                EnterTransition.None
+            },
+            exit = shrinkVertically(animationSpec = tween(durationMillis = 180)) + fadeOut(animationSpec = tween(durationMillis = 120))
+        ) {
+            Text(
+                item.text,
+                style = TextStyle(color = textColor, fontSize = 14.sp, lineHeight = 22.sp, fontStyle = FontStyle.Italic),
+                modifier = Modifier.padding(top = 6.dp)
+            )
+        }
+    }
+}
 
 @Composable
 private fun ToolbarChip(

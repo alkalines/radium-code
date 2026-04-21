@@ -114,4 +114,32 @@ class AgentToolWindowFactoryTest {
             composerTrailingButton(isStreaming = false)
         )
     }
+
+    @Test
+    fun `keeps thinking items collapsed by default`() {
+        assertFalse(isThinkingExpanded(emptySet(), itemId = "thinking-2"))
+    }
+
+    @Test
+    fun `toggles thinking item expansion independently by stable id`() {
+        val expanded = toggledThinkingItemExpansion(emptySet(), itemId = "thinking-2")
+        val collapsedAgain = toggledThinkingItemExpansion(expanded, itemId = "thinking-2")
+
+        assertTrue(isThinkingExpanded(expanded, itemId = "thinking-2"))
+        assertFalse(isThinkingExpanded(expanded, itemId = "thinking-3"))
+        assertFalse(isThinkingExpanded(collapsedAgain, itemId = "thinking-2"))
+    }
+
+    @Test
+    fun `rotates thinking chevron downward when expanded`() {
+        assertEquals(0f, thinkingChevronRotation(isExpanded = false))
+        assertEquals(90f, thinkingChevronRotation(isExpanded = true))
+    }
+
+    @Test
+    fun `animates thinking content only when expansion state changes to open`() {
+        assertFalse(shouldAnimateThinkingExpansion(wasExpanded = false, isExpanded = false))
+        assertTrue(shouldAnimateThinkingExpansion(wasExpanded = false, isExpanded = true))
+        assertFalse(shouldAnimateThinkingExpansion(wasExpanded = true, isExpanded = true))
+    }
 }

@@ -10,6 +10,7 @@ import net.alkalines.radiumcode.agent.il.IlToolResultBlock
 import net.alkalines.radiumcode.agent.providers.ProviderRegistry
 
 data class AgentChatItem(
+    val id: String,
     val role: IlRole,
     val text: String,
     val kind: Kind,
@@ -42,17 +43,19 @@ object AgentToolWindowPresenter {
         session.turns.forEach { turn ->
             turn.blocks.forEach { block ->
                 when (block) {
-                    is IlTextBlock -> add(AgentChatItem(turn.role, block.text, AgentChatItem.Kind.TEXT, turn.role.alignment()))
-                    is IlThinkingBlock -> add(AgentChatItem(turn.role, block.text, AgentChatItem.Kind.THINKING, turn.role.alignment()))
-                    is IlToolCallBlock -> add(AgentChatItem(turn.role, block.toolName ?: "Tool call", AgentChatItem.Kind.TOOL, turn.role.alignment()))
-                    is IlToolResultBlock -> add(AgentChatItem(turn.role, block.outputPayload, AgentChatItem.Kind.TOOL, turn.role.alignment()))
-                    is IlRefusalBlock -> add(AgentChatItem(turn.role, block.text, AgentChatItem.Kind.ERROR, turn.role.alignment()))
+                    is IlTextBlock -> add(AgentChatItem(chatItemId(turn.id, block.id), turn.role, block.text, AgentChatItem.Kind.TEXT, turn.role.alignment()))
+                    is IlThinkingBlock -> add(AgentChatItem(chatItemId(turn.id, block.id), turn.role, block.text, AgentChatItem.Kind.THINKING, turn.role.alignment()))
+                    is IlToolCallBlock -> add(AgentChatItem(chatItemId(turn.id, block.id), turn.role, block.toolName ?: "Tool call", AgentChatItem.Kind.TOOL, turn.role.alignment()))
+                    is IlToolResultBlock -> add(AgentChatItem(chatItemId(turn.id, block.id), turn.role, block.outputPayload, AgentChatItem.Kind.TOOL, turn.role.alignment()))
+                    is IlRefusalBlock -> add(AgentChatItem(chatItemId(turn.id, block.id), turn.role, block.text, AgentChatItem.Kind.ERROR, turn.role.alignment()))
                     else -> Unit
                 }
             }
-            turn.error?.let { add(AgentChatItem(turn.role, it.message, AgentChatItem.Kind.ERROR, turn.role.alignment())) }
+            turn.error?.let { add(AgentChatItem(chatItemId(turn.id, "error"), turn.role, it.message, AgentChatItem.Kind.ERROR, turn.role.alignment())) }
         }
     }
+
+    private fun chatItemId(turnId: String, blockId: String): String = "$turnId:$blockId"
 
     private fun IlRole.alignment(): AgentChatItem.Alignment =
         if (this == IlRole.USER) AgentChatItem.Alignment.END else AgentChatItem.Alignment.START

@@ -53,19 +53,59 @@ class AgentToolWindowPresenterTest {
 
         assertEquals(4, items.size)
         assertEquals("Hello", items[0].text)
+        assertEquals("assistant-1:thinking-1", items[1].id)
         assertEquals(AgentChatItem.Kind.THINKING, items[1].kind)
         assertEquals("Planning", items[1].text)
+        assertEquals("assistant-1:text-1", items[2].id)
         assertEquals(AgentChatItem.Kind.TEXT, items[2].kind)
         assertEquals("Answer", items[2].text)
         assertTrue(items[3].text.contains("OpenRouterProvider"))
     }
 
     @Test
+    fun `namespaces repeated block ids by turn id`() {
+        val session = IlConversationSession(
+            turns = listOf(
+                IlConversationTurn(
+                    id = "assistant-1",
+                    role = IlRole.ASSISTANT,
+                    blocks = listOf(
+                        IlThinkingBlock("thinking-1", "First", IlThinkingVisibility.SUMMARY, null, net.alkalines.radiumcode.agent.il.IlBlockStatus.COMPLETED, IlMeta.openrouter("thinking"))
+                    ),
+                    status = IlTurnStatus.COMPLETED,
+                    usage = null,
+                    finish = null,
+                    willContinue = false,
+                    meta = IlMeta.openrouter("assistant"),
+                ),
+                IlConversationTurn(
+                    id = "assistant-2",
+                    role = IlRole.ASSISTANT,
+                    blocks = listOf(
+                        IlThinkingBlock("thinking-1", "Second", IlThinkingVisibility.SUMMARY, null, net.alkalines.radiumcode.agent.il.IlBlockStatus.COMPLETED, IlMeta.openrouter("thinking"))
+                    ),
+                    status = IlTurnStatus.COMPLETED,
+                    usage = null,
+                    finish = null,
+                    willContinue = false,
+                    meta = IlMeta.openrouter("assistant"),
+                )
+            )
+        )
+
+        val items = AgentToolWindowPresenter.chatItems(session)
+
+        assertEquals("assistant-1:thinking-1", items[0].id)
+        assertEquals("assistant-2:thinking-1", items[1].id)
+        assertTrue(items.map { it.id }.distinct().size == items.size)
+    }
+
+    @Test
     fun `auto scroll signal changes as streaming text grows and items are added`() {
         val empty = emptyList<AgentChatItem>()
-        val oneShort = listOf(AgentChatItem(IlRole.ASSISTANT, "hi", AgentChatItem.Kind.TEXT, AgentChatItem.Alignment.START))
-        val oneLonger = listOf(AgentChatItem(IlRole.ASSISTANT, "hi there", AgentChatItem.Kind.TEXT, AgentChatItem.Alignment.START))
-        val twoItems = oneShort + AgentChatItem(IlRole.ASSISTANT, "x", AgentChatItem.Kind.TEXT, AgentChatItem.Alignment.START)
+        val oneShort = listOf(AgentChatItem("text-1", IlRole.ASSISTANT, "hi", AgentChatItem.Kind.TEXT, AgentChatItem.Alignment.START))
+        val oneLonger = listOf(AgentChatItem("text-1", IlRole.ASSISTANT, "hi there", AgentChatItem.Kind.TEXT, AgentChatItem.Alignment.START))
+        val twoItems = oneShort + AgentChatItem("text-2", IlRole.ASSISTANT, "x", AgentChatItem.Kind.TEXT, AgentChatItem.Alignment.START)
 
         val emptySignal = AgentToolWindowPresenter.autoScrollSignal(empty)
         val shortSignal = AgentToolWindowPresenter.autoScrollSignal(oneShort)
