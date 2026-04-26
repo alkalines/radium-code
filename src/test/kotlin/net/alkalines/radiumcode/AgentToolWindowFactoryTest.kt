@@ -19,6 +19,55 @@ class AgentToolWindowFactoryTest {
     }
 
     @Test
+    fun `starts on the chat route`() {
+        assertEquals(AgentToolWindowRoute.CHAT, AgentToolWindowRoute.initial())
+    }
+
+    @Test
+    fun `selects config route from the toolbar action`() {
+        assertEquals(AgentToolWindowRoute.CONFIG, AgentToolWindowRoute.showConfig())
+    }
+
+    @Test
+    fun `toggles config route back to chat`() {
+        assertEquals(AgentToolWindowRoute.CONFIG, AgentToolWindowRoute.toggleConfig(AgentToolWindowRoute.CHAT))
+        assertEquals(AgentToolWindowRoute.CHAT, AgentToolWindowRoute.toggleConfig(AgentToolWindowRoute.CONFIG))
+    }
+
+    @Test
+    fun `config mock label is config`() {
+        assertEquals("config", AgentConfigToolWindowContentModel.mockLabel())
+    }
+
+    @Test
+    fun `config toolbar tooltip is config`() {
+        assertEquals("Config", AgentToolWindowToolbarModel.configTooltip())
+    }
+
+    @Test
+    fun `config toolbar button background is only visible during interaction`() {
+        assertFalse(AgentToolWindowToolbarModel.showsConfigButtonBackground(isHovered = false, isPressed = false))
+        assertTrue(AgentToolWindowToolbarModel.showsConfigButtonBackground(isHovered = true, isPressed = false))
+        assertTrue(AgentToolWindowToolbarModel.showsConfigButtonBackground(isHovered = false, isPressed = true))
+    }
+
+    @Test
+    fun `config toolbar button uses pressed background while pressed`() {
+        assertEquals(
+            AgentToolWindowButtonBackground.NONE,
+            AgentToolWindowToolbarModel.configButtonBackground(isHovered = false, isPressed = false)
+        )
+        assertEquals(
+            AgentToolWindowButtonBackground.HOVER,
+            AgentToolWindowToolbarModel.configButtonBackground(isHovered = true, isPressed = false)
+        )
+        assertEquals(
+            AgentToolWindowButtonBackground.PRESSED,
+            AgentToolWindowToolbarModel.configButtonBackground(isHovered = true, isPressed = true)
+        )
+    }
+
+    @Test
     fun `submits the prompt when enter is pressed without shift`() {
         assertTrue(
             shouldSubmitPromptFromKeyEvent(
