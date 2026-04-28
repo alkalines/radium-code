@@ -11,9 +11,13 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import net.alkalines.radiumcode.agent.il.IlCapability
 import net.alkalines.radiumcode.agent.il.IlConversationTurn
 import net.alkalines.radiumcode.agent.il.IlFinishReason
 import net.alkalines.radiumcode.agent.il.IlMeta
+import net.alkalines.radiumcode.agent.il.IlModelDescriptor
+import net.alkalines.radiumcode.agent.il.IlModelSource
+import net.alkalines.radiumcode.agent.il.IlReasoningEffort
 import net.alkalines.radiumcode.agent.il.IlRole
 import net.alkalines.radiumcode.agent.il.IlTextBlock
 import net.alkalines.radiumcode.agent.il.IlThinkingBlock
@@ -108,7 +112,7 @@ class OpenRouterProviderTest {
 
             assertEquals("Bearer test-key", recorded.getHeader("Authorization"))
             assertContains(requestJson, "\"model\":\"z-ai/glm-4.5-air:free\"")
-            assertContains(requestJson, "\"reasoning\":{\"enabled\":true}")
+            assertContains(requestJson, "\"reasoning\":{\"effort\":\"medium\"}")
             assertContains(requestJson, "\"status\":\"completed\"")
             assertContains(requestJson, "\"id\":\"assistant-1\"")
             assertTrue(events.any { it is net.alkalines.radiumcode.agent.il.TurnStarted })
@@ -461,8 +465,7 @@ class OpenRouterProviderTest {
         )
 
         val request = net.alkalines.radiumcode.agent.il.IlGenerateRequest(
-            providerId = "openrouter",
-            modelId = "z-ai/glm-4.5-air:free",
+            model = descriptor(),
             input = listOf(
                 IlConversationTurn.userText(id = "user-1", text = "Lookup"),
                 IlConversationTurn(
@@ -539,8 +542,7 @@ class OpenRouterProviderTest {
         )
 
         val request = net.alkalines.radiumcode.agent.il.IlGenerateRequest(
-            providerId = "openrouter",
-            modelId = "z-ai/glm-4.5-air:free",
+            model = descriptor(),
             input = listOf(
                 IlConversationTurn.userText(id = "user-1", text = "Lookup"),
                 IlConversationTurn(
@@ -588,11 +590,17 @@ class OpenRouterProviderTest {
             apiKeyOverride = "test-key",
         )
 
-        val request = request().copy(modelId = "unknown-model")
+        val request = request(
+            model = descriptor(
+                modelId = "unknown-model",
+                capabilities = setOf(IlCapability.TEXT, IlCapability.STREAMING),
+                reasoningEffort = null,
+            )
+        )
 
         val body = provider.buildRequestBody(request).toString()
 
-        assertFalse(body.contains("\"reasoning\":{\"enabled\":true}"))
+        assertFalse(body.contains("\"reasoning\":"))
     }
 
     @Test
@@ -603,8 +611,11 @@ class OpenRouterProviderTest {
         )
 
         val request = net.alkalines.radiumcode.agent.il.IlGenerateRequest(
-            providerId = "openrouter",
-            modelId = "unknown-model",
+            model = descriptor(
+                modelId = "unknown-model",
+                capabilities = setOf(IlCapability.TEXT, IlCapability.STREAMING),
+                reasoningEffort = null,
+            ),
             input = listOf(IlConversationTurn.userText(id = "user-1", text = "Hello")),
             tools = listOf(
                 IlToolDefinition(
@@ -706,8 +717,7 @@ class OpenRouterProviderTest {
         )
 
         val request = net.alkalines.radiumcode.agent.il.IlGenerateRequest(
-            providerId = "openrouter",
-            modelId = "z-ai/glm-4.5-air:free",
+            model = descriptor(),
             input = listOf(
                 textTurn(id = "system-1", role = IlRole.SYSTEM, text = "You are strict"),
                 textTurn(id = "developer-1", role = IlRole.DEVELOPER, text = "Reply in English"),
@@ -785,8 +795,7 @@ class OpenRouterProviderTest {
         )
 
         val request = net.alkalines.radiumcode.agent.il.IlGenerateRequest(
-            providerId = "openrouter",
-            modelId = "z-ai/glm-4.5-air:free",
+            model = descriptor(),
             input = listOf(
                 IlConversationTurn.userText(id = "user-1", text = "first"),
                 IlConversationTurn(
@@ -822,11 +831,31 @@ class OpenRouterProviderTest {
         assertFalse(body.contains("\"content\":[]"))
     }
 
-    private fun request(
-        assistantBlocks: List<net.alkalines.radiumcode.agent.il.IlBlock> = listOf(IlTextBlock.completed(id = "text-1", text = "Previous"))
-    ) = net.alkalines.radiumcode.agent.il.IlGenerateRequest(
+    private fun descriptor(
+        modelId: String = "z-ai/glm-4.5-air:free",
+        capabilities: Set<IlCapability> = setOf(IlCapability.TEXT, IlCapability.THINKING, IlCapability.TOOL_CALLING, IlCapability.STREAMING),
+        reasoningEffort: IlReasoningEffort? = IlReasoningEffort.MEDIUM,
+    ) = IlModelDescriptor(
+        id = "id-$modelId",
         providerId = "openrouter",
-        modelId = "z-ai/glm-4.5-air:free",
+        modelId = modelId,
+        displayName = modelId,
+        maxInputTokens = null,
+        maxOutputTokens = null,
+        inputPricePerToken = null,
+        outputPricePerToken = null,
+        cacheReadPricePerToken = null,
+        cacheWritePricePerToken = null,
+        capabilities = capabilities,
+        reasoningEffort = reasoningEffort,
+        source = IlModelSource.MANUAL,
+    )
+
+    private fun request(
+        assistantBlocks: List<net.alkalines.radiumcode.agent.il.IlBlock> = listOf(IlTextBlock.completed(id = "text-1", text = "Previous")),
+        model: IlModelDescriptor = descriptor(),
+    ) = net.alkalines.radiumcode.agent.il.IlGenerateRequest(
+        model = model,
         input = listOf(
             IlConversationTurn.userText(id = "user-1", text = "Hello"),
             IlConversationTurn(

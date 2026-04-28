@@ -1,5 +1,6 @@
 package net.alkalines.radiumcode.agent.runtime
 
+import com.intellij.openapi.Disposable
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -12,12 +13,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import net.alkalines.radiumcode.agent.config.AgentModelConfigStore
 import net.alkalines.radiumcode.agent.il.IlCapability
 import net.alkalines.radiumcode.agent.il.IlConversationSession
 import net.alkalines.radiumcode.agent.il.IlConversationTurn
@@ -25,6 +27,7 @@ import net.alkalines.radiumcode.agent.il.IlFinish
 import net.alkalines.radiumcode.agent.il.IlFinishReason
 import net.alkalines.radiumcode.agent.il.IlGenerateRequest
 import net.alkalines.radiumcode.agent.il.IlMeta
+import net.alkalines.radiumcode.agent.il.IlModelDescriptor
 import net.alkalines.radiumcode.agent.il.IlRole
 import net.alkalines.radiumcode.agent.il.IlStreamEvent
 import net.alkalines.radiumcode.agent.il.IlToolCallBlock
@@ -51,35 +54,60 @@ enum class SubmitPromptResult {
 
 class AgentRuntime(
     private val registry: ProviderRegistry = ProviderRegistry.lazyInstance,
+    private val configStore: AgentModelConfigStore = AgentModelConfigStore.getInstance(),
     private val config: AgentConfig = AgentConfig(),
     private val toolExecutor: ToolExecutor = InMemoryToolExecutor(),
     private val toolCatalog: ToolCatalog = EmptyToolCatalog,
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
-) {
+    externalScope: CoroutineScope? = null,
+) : Disposable {
+    private val runtimeJob = SupervisorJob()
+    private val scope: CoroutineScope = externalScope ?: CoroutineScope(runtimeJob + Dispatchers.Default)
     private val reducer = AgentStreamReducer()
     private val stateLock = Any()
     private var currentSession = IlConversationSession()
     private val _session = MutableStateFlow(IlConversationSession())
     private val _state = MutableStateFlow(initialState())
     private var activeJob: Job? = null
+    private var selectionJob: Job? = null
     private var sequenceNumber = 0L
 
     val state: StateFlow<AgentSessionState> = _state.asStateFlow()
     val session: StateFlow<IlConversationSession> = _session.asStateFlow()
 
-    fun selectModel(providerId: String, modelId: String) {
+    init {
+        selectionJob = scope.launch {
+            combine(configStore.configuredModels, configStore.lastSelectedModelId) { models, lastSelectedModelId ->
+                models to lastSelectedModelId
+            }.collect { (models, lastSelectedModelId) ->
+                reconcileSelection(models, lastSelectedModelId)
+            }
+        }
+    }
+
+    fun selectModel(configuredModelId: String) {
+        var shouldPersistSelection = false
         synchronized(stateLock) {
-            val selection = resolveSelection(providerId, modelId)
             val current = _state.value
+            if (current.activeRunId != null) {
+                return
+            }
+            val model = configStore.configuredModel(configuredModelId)
+            shouldPersistSelection = model != null && registry.providerOrNull(model.providerId) != null
             publishLocked(
                 currentSession,
                 current.copy(
-                    selectedProviderId = providerId,
-                    selectedModelId = modelId,
-                    hasUsableSelection = selection != null,
-                    inlineError = if (selection == null) "Selected provider or model is unavailable." else null,
+                    selectedModel = model,
+                    hasUsableSelection = shouldPersistSelection,
+                    inlineError = when {
+                        model == null -> "Selected model is no longer available."
+                        registry.providerOrNull(model.providerId) == null -> "Provider \"${model.providerId}\" is not registered."
+                        else -> null
+                    },
                 )
             )
+        }
+        if (shouldPersistSelection) {
+            configStore.setLastSelectedModel(configuredModelId)
         }
     }
 
@@ -95,13 +123,13 @@ class AgentRuntime(
             if (current.activeRunId != null) {
                 return SubmitPromptResult.BUSY
             }
-            val selection = resolveSelection(current.selectedProviderId, current.selectedModelId)
-            if (selection == null) {
+            val selectedModel = current.selectedModel
+            if (selectedModel == null || registry.providerOrNull(selectedModel.providerId) == null) {
                 publishLocked(
                     currentSession,
                     current.copy(
                         hasUsableSelection = false,
-                        inlineError = "Select a configured provider and model before sending a prompt.",
+                        inlineError = "No configured model. Open Config to add one.",
                     )
                 )
                 return SubmitPromptResult.MISSING_PROVIDER_OR_MODEL
@@ -114,8 +142,6 @@ class AgentRuntime(
                 currentSession,
                 current.copy(
                     session = currentSession,
-                    selectedProviderId = selection.providerId,
-                    selectedModelId = selection.modelId,
                     activeRunId = runId,
                     activeAssistantTurnId = null,
                     hasUsableSelection = true,
@@ -356,6 +382,7 @@ class AgentRuntime(
                 )
             )
         }
+        reconcileSelection(configStore.configuredModels.value, configStore.lastSelectedModelId.value)
     }
 
     private fun cancelAssistantTurn(
@@ -380,23 +407,20 @@ class AgentRuntime(
     }
 
     private fun buildRequestContext(requestIndex: Int): RequestContext {
-        val selection = resolveSelection(_state.value.selectedProviderId, _state.value.selectedModelId)
+        val selectedModel = _state.value.selectedModel
             ?: error("buildRequestContext called without a usable selection")
-        val provider = registry.provider(selection.providerId)
-        val supportsToolCalling = registry.model(selection.providerId, selection.modelId)
-            ?.capabilities
-            ?.contains(IlCapability.TOOL_CALLING) == true
+        val provider = registry.provider(selectedModel.providerId)
+        val supportsToolCalling = IlCapability.TOOL_CALLING in selectedModel.capabilities
         val tools = if (supportsToolCalling) toolCatalog.definitions() else emptyList()
         return RequestContext(
             provider = provider,
             request = IlGenerateRequest(
-                providerId = selection.providerId,
-                modelId = selection.modelId,
+                model = selectedModel,
                 input = currentSession.turns,
                 tools = tools,
                 toolChoice = if (tools.isEmpty()) IlToolChoice.None else IlToolChoice.Auto,
                 allowParallelToolCalls = tools.isNotEmpty(),
-                maxOutputTokens = config.defaultMaxOutputTokens,
+                maxOutputTokens = config.defaultMaxOutputTokens ?: selectedModel.maxOutputTokens?.toInt(),
                 temperature = config.defaultTemperature,
                 topP = null,
                 stopSequences = emptyList(),
@@ -407,28 +431,58 @@ class AgentRuntime(
         )
     }
 
-    private fun resolveSelection(selectedProviderId: String?, selectedModelId: String?): ResolvedSelection? {
-        if (selectedProviderId != null || selectedModelId != null) {
-            if (selectedProviderId == null || selectedModelId == null) {
-                return null
+    private fun reconcileSelection(currentList: List<IlModelDescriptor>, lastSelectedModelId: String? = configStore.lastSelectedModelId.value) {
+        synchronized(stateLock) {
+            val current = _state.value
+            if (current.activeRunId != null) {
+                return@synchronized
             }
-            val selectedModel = registry.model(selectedProviderId, selectedModelId) ?: return null
-            val provider = registry.providerOrNull(selectedModel.providerId) ?: return null
-            return ResolvedSelection(providerId = provider.providerId, modelId = selectedModel.modelId)
+            val selected = current.selectedModel
+            val resolvedSelection: IlModelDescriptor? = when {
+                selected != null && selected.id == lastSelectedModelId ->
+                    currentList.firstOrNull { it.id == selected.id } ?: fallbackSelection(currentList, lastSelectedModelId)
+                else -> fallbackSelection(currentList, lastSelectedModelId)
+            }
+            val providerAvailable = resolvedSelection?.let { registry.providerOrNull(it.providerId) != null } == true
+            publishLocked(
+                currentSession,
+                current.copy(
+                    selectedModel = resolvedSelection,
+                    hasUsableSelection = providerAvailable,
+                    inlineError = when {
+                        resolvedSelection == null -> "No configured model. Open Config to add one."
+                        !providerAvailable -> "Provider \"${resolvedSelection.providerId}\" is not registered."
+                        else -> null
+                    },
+                )
+            )
         }
-        val defaultModel = registry.defaultModel ?: return null
-        val provider = registry.providerOrNull(defaultModel.providerId) ?: return null
-        return ResolvedSelection(providerId = provider.providerId, modelId = defaultModel.modelId)
+    }
+
+    private fun fallbackSelection(currentList: List<IlModelDescriptor>, lastSelectedModelId: String?): IlModelDescriptor? {
+        if (currentList.isEmpty()) {
+            return null
+        }
+        return run {
+            val byLast = lastSelectedModelId?.let { id -> currentList.firstOrNull { it.id == id } }
+            byLast ?: currentList.firstOrNull()
+        }
     }
 
     private fun initialState(): AgentSessionState {
-        val defaultModel = registry.defaultModel
+        val models = configStore.configuredModels.value
+        val lastId = configStore.lastSelectedModelId.value
+        val initial = lastId?.let { id -> models.firstOrNull { it.id == id } } ?: models.firstOrNull()
+        val providerAvailable = initial?.let { registry.providerOrNull(it.providerId) != null } == true
         return AgentSessionState(
             session = currentSession,
-            selectedProviderId = defaultModel?.providerId,
-            selectedModelId = defaultModel?.modelId,
-            hasUsableSelection = defaultModel != null,
-            inlineError = if (defaultModel == null) "No provider or model is configured." else null,
+            selectedModel = initial,
+            hasUsableSelection = providerAvailable,
+            inlineError = when {
+                initial == null -> "No configured model. Open Config to add one."
+                !providerAvailable -> "Provider \"${initial.providerId}\" is not registered."
+                else -> null
+            },
         )
     }
 
@@ -436,6 +490,14 @@ class AgentRuntime(
         currentSession = session
         _session.value = session
         _state.value = state.copy(session = session)
+    }
+
+    override fun dispose() {
+        activeJob?.cancel(CancellationException("Runtime disposed"))
+        activeJob = null
+        selectionJob?.cancel(CancellationException("Runtime disposed"))
+        selectionJob = null
+        runtimeJob.cancel(CancellationException("Runtime disposed"))
     }
 
     private fun stampEvent(event: IlStreamEvent, requestIndex: Int): IlStreamEvent {
@@ -467,11 +529,6 @@ class AgentRuntime(
     private data class RequestContext(
         val provider: net.alkalines.radiumcode.agent.providers.AgentProvider,
         val request: IlGenerateRequest,
-    )
-
-    private data class ResolvedSelection(
-        val providerId: String,
-        val modelId: String,
     )
 
     private data class PostStreamState(

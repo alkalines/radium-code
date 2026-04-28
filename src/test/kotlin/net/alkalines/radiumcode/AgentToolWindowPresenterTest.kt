@@ -9,22 +9,43 @@ import net.alkalines.radiumcode.agent.il.IlConversationSession
 import net.alkalines.radiumcode.agent.il.IlConversationTurn
 import net.alkalines.radiumcode.agent.il.IlMeta
 import net.alkalines.radiumcode.agent.il.IlModelDescriptor
+import net.alkalines.radiumcode.agent.il.IlModelSource
 import net.alkalines.radiumcode.agent.il.IlRole
 import net.alkalines.radiumcode.agent.il.IlTextBlock
 import net.alkalines.radiumcode.agent.il.IlThinkingBlock
 import net.alkalines.radiumcode.agent.il.IlThinkingVisibility
 import net.alkalines.radiumcode.agent.il.IlTurnError
 import net.alkalines.radiumcode.agent.il.IlTurnStatus
-import net.alkalines.radiumcode.agent.providers.AgentProvider
-import net.alkalines.radiumcode.agent.providers.ProviderRegistry
 
 class AgentToolWindowPresenterTest {
 
     @Test
-    fun `builds the compact selector label from the registry default model`() {
-        val registry = ProviderRegistry.fromProviders(listOf(TestProvider()))
+    fun `model label uses display name when a model is selected`() {
+        val descriptor = IlModelDescriptor(
+            id = "id-1",
+            providerId = "openrouter",
+            modelId = "z-ai/glm-4.5-air:free",
+            displayName = "GLM 4.5 Air",
+            maxInputTokens = null,
+            maxOutputTokens = null,
+            inputPricePerToken = null,
+            outputPricePerToken = null,
+            cacheReadPricePerToken = null,
+            cacheWritePricePerToken = null,
+            capabilities = setOf(IlCapability.TEXT, IlCapability.THINKING, IlCapability.STREAMING),
+            reasoningEffort = null,
+            source = IlModelSource.MANUAL,
+        )
 
-        assertEquals("z-ai/glm-4.5-air:free", AgentToolWindowPresenter.modelLabel(registry))
+        assertEquals("GLM 4.5 Air", AgentToolWindowPresenter.modelLabel(descriptor))
+    }
+
+    @Test
+    fun `model label falls back to no-configured-model when nothing selected`() {
+        assertEquals(
+            AgentToolWindowPresenter.NO_CONFIGURED_MODEL_LABEL,
+            AgentToolWindowPresenter.modelLabel(null)
+        )
     }
 
     @Test
@@ -150,20 +171,4 @@ class AgentToolWindowPresenterTest {
         assertEquals(AgentChatItem.Alignment.START, items[1].alignment)
     }
 
-    private class TestProvider : AgentProvider() {
-        override val providerId = "openrouter"
-        override val displayName = "OpenRouter"
-        override val models = listOf(
-            IlModelDescriptor(
-                providerId = providerId,
-                modelId = "z-ai/glm-4.5-air:free",
-                displayName = "OpenRouter",
-                capabilities = setOf(IlCapability.TEXT, IlCapability.THINKING, IlCapability.STREAMING),
-                isDefault = true,
-            )
-        )
-
-        override fun stream(request: net.alkalines.radiumcode.agent.il.IlGenerateRequest) =
-            throw UnsupportedOperationException("not needed for presenter test")
-    }
 }

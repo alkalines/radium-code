@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -64,8 +65,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.IconLoader
+import net.alkalines.radiumcode.agent.config.AgentModelConfigStore
 import net.alkalines.radiumcode.agent.il.IlRole
+import net.alkalines.radiumcode.agent.il.IlModelDescriptor
 import net.alkalines.radiumcode.agent.providers.ProviderRegistry
 import net.alkalines.radiumcode.agent.runtime.AgentRuntime
 import net.alkalines.radiumcode.agent.runtime.SubmitPromptResult
@@ -82,40 +86,56 @@ internal enum class ComposerTrailingButton {
 }
 
 internal class AgentChatToolWindowState(
-    val registry: ProviderRegistry,
     val runtime: AgentRuntime,
-) {
+    val store: AgentModelConfigStore,
+) : Disposable {
     var prompt by mutableStateOf(TextFieldValue(""))
     var modelMenuExpanded by mutableStateOf(false)
     var selectorXpx by mutableIntStateOf(0)
     var selectorYpx by mutableIntStateOf(0)
     var selectorWidthPx by mutableIntStateOf(0)
+    var selectorHeightPx by mutableIntStateOf(0)
+    var menuContainerXpx by mutableIntStateOf(0)
+    var menuContainerYpx by mutableIntStateOf(0)
     var expandedThinkingItems by mutableStateOf(emptySet<String>())
+
+    override fun dispose() {
+        runtime.dispose()
+    }
 }
 
 @Composable
 internal fun rememberAgentChatToolWindowState(): AgentChatToolWindowState {
     val registry = remember { ProviderRegistry.lazyInstance }
-    val runtime = remember(registry) { AgentRuntime(registry = registry) }
-    return remember(registry, runtime) {
-        AgentChatToolWindowState(registry = registry, runtime = runtime)
+    val store = remember { AgentModelConfigStore.getInstance() }
+    val runtime = remember(registry, store) {
+        AgentRuntime(registry = registry, configStore = store)
     }
+    val state = remember(runtime, store) {
+        AgentChatToolWindowState(runtime = runtime, store = store)
+    }
+    DisposableEffect(state) {
+        onDispose { state.dispose() }
+    }
+    return state
 }
 
 @Composable
 @Preview
 internal fun AgentChatToolWindowContent(chatState: AgentChatToolWindowState = rememberAgentChatToolWindowState()) {
-    val registry = chatState.registry
     val runtime = chatState.runtime
     val runtimeState by runtime.state.collectAsState()
     val chatItems = AgentToolWindowPresenter.chatItems(runtimeState.session)
-    val modelOptions = remember(registry.allModels) { registry.allModels.map { it.modelId } }
-    val selectedModel = runtimeState.selectedModelId ?: AgentToolWindowPresenter.modelLabel(registry)
+    val configuredModels by chatState.store.configuredModels.collectAsState()
+    val selectedModel = chatModelSelectorLabel(runtimeState.selectedModel)
     val prompt = chatState.prompt
     val modelMenuExpanded = chatState.modelMenuExpanded
     val selectorXpx = chatState.selectorXpx
     val selectorYpx = chatState.selectorYpx
     val selectorWidthPx = chatState.selectorWidthPx
+    val selectorHeightPx = chatState.selectorHeightPx
+    val menuContainerXpx = chatState.menuContainerXpx
+    val menuContainerYpx = chatState.menuContainerYpx
 
     val shape = RoundedCornerShape(24.dp)
     val surfaceColor = rememberThemeColor("Panel.background", 0xFFF7F8FA.toInt(), 0xFF2B2D30.toInt())
@@ -136,7 +156,7 @@ internal fun AgentChatToolWindowContent(chatState: AgentChatToolWindowState = re
     val sendContentColor = if (sendEnabled) Color.White else placeholderColor
     val bottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val menuWidth = 220.dp
-    val menuHeight = minOf(modelOptions.size * 42 + 40, 280).dp
+    val menuHeight = minOf(configuredModels.size * 42 + 40, 280).dp
     val menuGap = 8.dp
     val density = androidx.compose.ui.platform.LocalDensity.current
     val menuWidthPx = with(density) { menuWidth.roundToPx() }
@@ -161,15 +181,27 @@ internal fun AgentChatToolWindowContent(chatState: AgentChatToolWindowState = re
             .fillMaxSize()
             .padding(horizontal = 16.dp, vertical = 12.dp)
             .padding(bottom = bottomPadding)
+            .onGloballyPositioned { coordinates ->
+                val position = coordinates.positionInRoot()
+                chatState.menuContainerXpx = position.x.toInt()
+                chatState.menuContainerYpx = position.y.toInt()
+            }
     ) {
-        if (modelMenuExpanded && modelOptions.isNotEmpty()) {
+        if (shouldShowModelMenu(modelMenuExpanded, configuredModels.size)) {
             Column(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset {
-                        IntOffset(
-                            x = selectorXpx + selectorWidthPx - menuWidthPx,
-                            y = selectorYpx - menuHeightPx - menuGapPx
+                        modelMenuOffset(
+                            selectorXpx = selectorXpx,
+                            selectorYpx = selectorYpx,
+                            selectorWidthPx = selectorWidthPx,
+                            selectorHeightPx = selectorHeightPx,
+                            containerXpx = menuContainerXpx,
+                            containerYpx = menuContainerYpx,
+                            menuWidthPx = menuWidthPx,
+                            menuHeightPx = menuHeightPx,
+                            menuGapPx = menuGapPx
                         )
                     }
                     .zIndex(2f)
@@ -185,8 +217,9 @@ internal fun AgentChatToolWindowContent(chatState: AgentChatToolWindowState = re
                     style = TextStyle(color = placeholderColor, fontSize = 12.sp),
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                 )
-                modelOptions.forEach { option ->
-                    val selected = option == selectedModel
+                val activeId = runtimeState.selectedModel?.id
+                configuredModels.forEach { model ->
+                    val selected = model.id == activeId
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -194,15 +227,13 @@ internal fun AgentChatToolWindowContent(chatState: AgentChatToolWindowState = re
                             .clip(RoundedCornerShape(10.dp))
                             .background(if (selected) selectedRowColor else Color.Transparent)
                             .clickable {
-                                registry.allModels.firstOrNull { it.modelId == option }?.let {
-                                    runtime.selectModel(it.providerId, it.modelId)
-                                }
+                                runtime.selectModel(model.id)
                                 chatState.modelMenuExpanded = false
                             }
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(option, style = TextStyle(color = textColor, fontSize = 14.sp))
+                        Text(chatModelSelectorLabel(model), style = TextStyle(color = textColor, fontSize = 14.sp))
                         Spacer(Modifier.weight(1f))
                         if (selected) {
                             Icon(
@@ -338,7 +369,7 @@ internal fun AgentChatToolWindowContent(chatState: AgentChatToolWindowState = re
                         }
                     }
                 )
-                runtimeState.inlineError?.let { message ->
+                visibleComposerInlineError(runtimeState.inlineError)?.let { message ->
                     Text(
                         message,
                         style = TextStyle(color = errorColor, fontSize = 13.sp, lineHeight = 18.sp),
@@ -360,11 +391,14 @@ internal fun AgentChatToolWindowContent(chatState: AgentChatToolWindowState = re
                         trailingIcon = expandIcon,
                         modifier = Modifier.onGloballyPositioned { coordinates ->
                             chatState.selectorWidthPx = coordinates.size.width
+                            chatState.selectorHeightPx = coordinates.size.height
                             val position = coordinates.positionInRoot()
                             chatState.selectorXpx = position.x.toInt()
                             chatState.selectorYpx = position.y.toInt()
                         },
-                        onClick = { chatState.modelMenuExpanded = !chatState.modelMenuExpanded },
+                        onClick = {
+                            chatState.modelMenuExpanded = configuredModels.isNotEmpty() && !chatState.modelMenuExpanded
+                        },
                         trailing = AgentMessageBundle.message("toolwindow.AgentToolWindow.expand")
                     )
                     Box(
@@ -429,6 +463,40 @@ internal fun composerTrailingButton(isStreaming: Boolean): ComposerTrailingButto
     } else {
         ComposerTrailingButton.SEND
     }
+
+internal fun shouldShowModelMenu(isExpanded: Boolean, configuredModelCount: Int): Boolean =
+    isExpanded && configuredModelCount > 0
+
+internal fun modelMenuOffset(
+    selectorXpx: Int,
+    selectorYpx: Int,
+    selectorWidthPx: Int,
+    selectorHeightPx: Int,
+    containerXpx: Int,
+    containerYpx: Int,
+    menuWidthPx: Int,
+    menuHeightPx: Int,
+    menuGapPx: Int,
+): IntOffset {
+    val selectorXInContainer = selectorXpx - containerXpx
+    val selectorYInContainer = selectorYpx - containerYpx
+    val menuX = selectorXInContainer + selectorWidthPx - menuWidthPx
+    val preferredY = selectorYInContainer - menuHeightPx - menuGapPx
+    val menuY = if (preferredY >= 0) {
+        preferredY
+    } else {
+        selectorYInContainer + selectorHeightPx + menuGapPx
+    }
+    return IntOffset(menuX, menuY)
+}
+
+internal fun visibleComposerInlineError(inlineError: String?): String? =
+    inlineError?.takeUnless { it == "No configured model. Open Config to add one." }
+
+internal fun chatModelSelectorLabel(selectedModel: IlModelDescriptor?): String =
+    selectedModel?.displayName?.takeIf { it.isNotBlank() }
+        ?: selectedModel?.modelId
+        ?: "No model"
 
 internal fun insertedLineBreakPromptValue(prompt: TextFieldValue): TextFieldValue {
     val selectionStart = minOf(prompt.selection.start, prompt.selection.end)

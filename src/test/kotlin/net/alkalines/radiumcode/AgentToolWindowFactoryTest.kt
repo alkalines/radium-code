@@ -4,6 +4,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import com.intellij.openapi.Disposable
 import net.alkalines.radiumcode.agent.runtime.SubmitPromptResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -37,6 +38,11 @@ class AgentToolWindowFactoryTest {
     @Test
     fun `config mock label is config`() {
         assertEquals("config", AgentConfigToolWindowContentModel.mockLabel())
+    }
+
+    @Test
+    fun `chat tool window state is disposable`() {
+        assertTrue(Disposable::class.java.isAssignableFrom(AgentChatToolWindowState::class.java))
     }
 
     @Test
@@ -162,6 +168,52 @@ class AgentToolWindowFactoryTest {
             ComposerTrailingButton.SEND,
             composerTrailingButton(isStreaming = false)
         )
+    }
+
+    @Test
+    fun `does not show model menu when no configured models exist`() {
+        assertFalse(shouldShowModelMenu(isExpanded = true, configuredModelCount = 0))
+    }
+
+    @Test
+    fun `shows model menu when expanded and configured models exist`() {
+        assertTrue(shouldShowModelMenu(isExpanded = true, configuredModelCount = 1))
+    }
+
+    @Test
+    fun `places model menu above selector when there is space`() {
+        val offset = modelMenuOffset(
+            selectorXpx = 196,
+            selectorYpx = 172,
+            selectorWidthPx = 160,
+            selectorHeightPx = 34,
+            containerXpx = 16,
+            containerYpx = 12,
+            menuWidthPx = 220,
+            menuHeightPx = 120,
+            menuGapPx = 8
+        )
+
+        assertEquals(120, offset.x)
+        assertEquals(32, offset.y)
+    }
+
+    @Test
+    fun `places model menu below selector when there is not enough space above`() {
+        val offset = modelMenuOffset(
+            selectorXpx = 196,
+            selectorYpx = 92,
+            selectorWidthPx = 160,
+            selectorHeightPx = 34,
+            containerXpx = 16,
+            containerYpx = 12,
+            menuWidthPx = 220,
+            menuHeightPx = 120,
+            menuGapPx = 8
+        )
+
+        assertEquals(120, offset.x)
+        assertEquals(122, offset.y)
     }
 
     @Test

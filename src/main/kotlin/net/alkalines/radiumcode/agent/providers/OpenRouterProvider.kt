@@ -2,12 +2,15 @@ package net.alkalines.radiumcode.agent.providers
 
 import com.intellij.openapi.diagnostic.Logger
 import java.io.InputStreamReader
+import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.job
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -15,8 +18,13 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import net.alkalines.radiumcode.agent.config.AgentModelConfigStore
+import net.alkalines.radiumcode.agent.config.ProviderSettings
 import net.alkalines.radiumcode.agent.il.BlockStarted
 import net.alkalines.radiumcode.agent.il.IlBlock
 import net.alkalines.radiumcode.agent.il.IlBlockKind
@@ -26,6 +34,8 @@ import net.alkalines.radiumcode.agent.il.IlFinishReason
 import net.alkalines.radiumcode.agent.il.IlGenerateRequest
 import net.alkalines.radiumcode.agent.il.IlMeta
 import net.alkalines.radiumcode.agent.il.IlModelDescriptor
+import net.alkalines.radiumcode.agent.il.IlModelSource
+import net.alkalines.radiumcode.agent.il.IlReasoningEffort
 import net.alkalines.radiumcode.agent.il.IlRole
 import net.alkalines.radiumcode.agent.il.IlStreamEvent
 import net.alkalines.radiumcode.agent.il.IlTextBlock
@@ -52,7 +62,9 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
-private const val OPENROUTER_API_KEY = "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" // TODO: configure a key outside source control or pass apiKeyOverride in tests
+internal const val OPENROUTER_PROVIDER_ID = "openrouter"
+private const val OPENROUTER_DEFAULT_RESPONSES_URL = "https://openrouter.ai/api/v1/responses"
+private const val OPENROUTER_DEFAULT_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
 internal fun openRouterHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(30, TimeUnit.SECONDS)
@@ -60,52 +72,146 @@ internal fun openRouterHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .readTimeout(0, TimeUnit.MILLISECONDS)
     .build()
 
+internal fun openRouterCatalogHttpClient(baseClient: OkHttpClient = openRouterHttpClient()): OkHttpClient =
+    baseClient.newBuilder()
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
 class OpenRouterProvider internal constructor(
-    private val baseUrl: HttpUrl = "https://openrouter.ai/api/v1/responses".toHttpUrl(),
+    private val baseUrl: HttpUrl? = null,
+    private val modelsUrlOverride: HttpUrl? = null,
     private val httpClient: OkHttpClient = openRouterHttpClient(),
+    private val catalogHttpClient: OkHttpClient = openRouterCatalogHttpClient(httpClient),
     private val apiKeyOverride: String? = null,
+    private val settingsLookup: () -> ProviderSettings? = {
+        runCatching { AgentModelConfigStore.getInstance().providerSettings(OPENROUTER_PROVIDER_ID) }.getOrNull()
+    },
 ) : AgentProvider() {
-    override val providerId = "openrouter"
+    constructor() : this(baseUrl = null)
+
+    override val providerId = OPENROUTER_PROVIDER_ID
     override val displayName = "OpenRouter"
-    override val models = listOf(
-        IlModelDescriptor(
-            providerId = providerId,
-            modelId = "z-ai/glm-4.5-air:free",
-            displayName = "OpenRouter",
-            capabilities = setOf(IlCapability.TEXT, IlCapability.THINKING, IlCapability.TOOL_CALLING, IlCapability.STREAMING),
-            isDefault = true,
-        ),
-        IlModelDescriptor(
-            providerId = providerId,
-            modelId = "moonshotai/kimi-k2.6",
-            displayName = "Kimi K2.6",
-            capabilities = setOf(IlCapability.TEXT, IlCapability.THINKING, IlCapability.TOOL_CALLING, IlCapability.STREAMING),
-            isDefault = false,
-        ),
-        IlModelDescriptor(
-            providerId = providerId,
-            modelId = "minimax/minimax-m2.7",
-            displayName = "MiniMax M2.7",
-            capabilities = setOf(IlCapability.TEXT, IlCapability.THINKING, IlCapability.TOOL_CALLING, IlCapability.STREAMING),
-            isDefault = false,
-        ),
-    )
 
     private val logger = Logger.getInstance(OpenRouterProvider::class.java)
     private val json = Json { ignoreUnknownKeys = true }
 
+    private fun resolveSettings(): ProviderSettings? = settingsLookup()
+
+    private fun resolveResponsesUrl(): HttpUrl {
+        baseUrl?.let { return it }
+        val settings = resolveSettings()
+        if (settings != null && settings.useCustomBaseUrl && !settings.baseUrl.isNullOrBlank()) {
+            return endpointUrl(settings.baseUrl, "responses")
+        }
+        return OPENROUTER_DEFAULT_RESPONSES_URL.toHttpUrl()
+    }
+
+    private fun resolveModelsUrl(settings: ProviderSettings): HttpUrl {
+        modelsUrlOverride?.let { return it }
+        if (settings.useCustomBaseUrl && !settings.baseUrl.isNullOrBlank()) {
+            return endpointUrl(settings.baseUrl, "models")
+        }
+        return OPENROUTER_DEFAULT_MODELS_URL.toHttpUrl()
+    }
+
+    private fun endpointUrl(baseUrl: String, endpoint: String): HttpUrl {
+        val url = baseUrl.toHttpUrl()
+        return if (url.pathSegments.lastOrNull { it.isNotBlank() } == endpoint) {
+            url
+        } else {
+            url.newBuilder().addPathSegment(endpoint).build()
+        }
+    }
+
+    private fun resolveApiKey(): String? = apiKeyOverride ?: resolveSettings()?.apiKey
+
+    override suspend fun fetchAvailableModels(settings: ProviderSettings): Result<List<IlModelDescriptor>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val url = resolveModelsUrl(settings)
+                val builder = Request.Builder()
+                    .url(url)
+                    .header("Accept", "application/json")
+                val key = apiKeyOverride ?: settings.apiKey
+                if (!key.isNullOrBlank()) {
+                    builder.header("Authorization", "Bearer $key")
+                }
+                val call = catalogHttpClient.newCall(builder.get().build())
+                currentCoroutineContext().job.invokeOnCompletion {
+                    if (!call.isCanceled()) {
+                        call.cancel()
+                    }
+                }
+                call.execute().use { response ->
+                    if (!response.isSuccessful) {
+                        error("OpenRouter /models returned HTTP ${response.code}")
+                    }
+                    val body = response.body?.string().orEmpty()
+                    parseCatalog(body)
+                }
+            }
+        }
+
+    internal fun parseCatalog(body: String): List<IlModelDescriptor> {
+        val parsed = json.parseToJsonElement(body).jsonObject
+        val data = parsed["data"]?.jsonArray ?: return emptyList()
+        return data.mapNotNull { element ->
+            val obj = element as? JsonObject ?: return@mapNotNull null
+            val modelId = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val displayName = obj["name"]?.jsonPrimitive?.contentOrNull ?: modelId
+            val contextLength = obj["context_length"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+            val topProvider = obj["top_provider"] as? JsonObject
+            val maxOutput = topProvider?.get("max_completion_tokens")?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+            val pricing = obj["pricing"] as? JsonObject
+            val inputPrice = pricing?.priceFor("prompt")
+            val outputPrice = pricing?.priceFor("completion")
+            val cacheRead = pricing?.priceFor("input_cache_read")
+            val cacheWrite = pricing?.priceFor("input_cache_write")
+            val supportedParams = (obj["supported_parameters"] as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                ?.toSet()
+                .orEmpty()
+            val capabilities = buildSet {
+                add(IlCapability.TEXT)
+                add(IlCapability.STREAMING)
+                if ("tools" in supportedParams) add(IlCapability.TOOL_CALLING)
+                if ("reasoning" in supportedParams || "include_reasoning" in supportedParams) {
+                    add(IlCapability.THINKING)
+                }
+            }
+            IlModelDescriptor(
+                id = UUID.randomUUID().toString(),
+                providerId = providerId,
+                modelId = modelId,
+                displayName = displayName,
+                maxInputTokens = contextLength,
+                maxOutputTokens = maxOutput,
+                inputPricePerToken = inputPrice,
+                outputPricePerToken = outputPrice,
+                cacheReadPricePerToken = cacheRead,
+                cacheWritePricePerToken = cacheWrite,
+                capabilities = capabilities,
+                reasoningEffort = null,
+                source = IlModelSource.CATALOG,
+            )
+        }
+    }
+
+    private fun JsonObject.priceFor(key: String): Double? =
+        this[key]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()
+
     override fun stream(request: IlGenerateRequest): Flow<IlStreamEvent> = flow {
         val syntheticTurnId = "openrouter-turn-${System.currentTimeMillis()}"
-        val apiKey = apiKeyOverride ?: OPENROUTER_API_KEY
+        val apiKey = resolveApiKey().orEmpty()
         if (apiKey.isBlank()) {
             emit(TurnStarted("preflight.created", syntheticTurnId, IlRole.ASSISTANT, meta("preflight.created", requestIndex = request.requestIndex())))
-            emit(StreamError("missing-key", syntheticTurnId, "OpenRouter API key not configured in OpenRouterProvider", meta("error", requestIndex = request.requestIndex())))
+            emit(StreamError("missing-key", syntheticTurnId, "OpenRouter API key is not configured. Open Config to add it.", meta("error", requestIndex = request.requestIndex())))
             return@flow
         }
 
         val body = buildRequestBody(request).toString()
         val httpRequest = Request.Builder()
-            .url(baseUrl)
+            .url(resolveResponsesUrl())
             .header("Authorization", "Bearer $apiKey")
             .header("Content-Type", "application/json")
             .post(body.toRequestBody("application/json".toMediaType()))
@@ -326,14 +432,17 @@ class OpenRouterProvider internal constructor(
     }
 
     internal fun buildRequestBody(request: IlGenerateRequest): JsonObject = buildJsonObject {
-        put("model", request.modelId)
+        val model = request.model
+        put("model", model.modelId)
         put("stream", true)
         request.maxOutputTokens?.let { put("max_output_tokens", it) }
-        val selectedModel = models.firstOrNull { it.providerId == request.providerId && it.modelId == request.modelId }
-        if (selectedModel?.capabilities?.contains(IlCapability.THINKING) == true) {
-            put("reasoning", buildJsonObject { put("enabled", true) })
+        if (IlCapability.THINKING in model.capabilities) {
+            val effort = model.reasoningEffort
+            if (effort != null && effort != IlReasoningEffort.NONE && effort.wireValue != null) {
+                put("reasoning", buildJsonObject { put("effort", effort.wireValue) })
+            }
         }
-        val supportsToolCalling = selectedModel?.capabilities?.contains(IlCapability.TOOL_CALLING) == true
+        val supportsToolCalling = IlCapability.TOOL_CALLING in model.capabilities
         if (supportsToolCalling && request.tools.isNotEmpty()) {
             put("tools", buildJsonArray {
                 request.tools.forEach { add(serializeToolDefinition(it)) }

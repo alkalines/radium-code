@@ -32,6 +32,8 @@
     <extensions defaultExtensionNs="com.intellij">
         <iconMapper mappingFile="RadiumCodeIconMappings.json"/>
         <notificationGroup id="Radium Code" displayType="BALLOON" isLogByDefault="true"/>
+        <applicationService
+                serviceImplementation="net.alkalines.radiumcode.agent.config.AgentModelConfigStore"/>
         <toolWindow id="AgentToolWindow"
                     factoryClass="net.alkalines.radiumcode.AgentToolWindowFactory"
                     anchor="left"

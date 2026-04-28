@@ -1,13 +1,13 @@
 package net.alkalines.radiumcode
 
 import net.alkalines.radiumcode.agent.il.IlConversationSession
+import net.alkalines.radiumcode.agent.il.IlModelDescriptor
 import net.alkalines.radiumcode.agent.il.IlRefusalBlock
 import net.alkalines.radiumcode.agent.il.IlRole
 import net.alkalines.radiumcode.agent.il.IlTextBlock
 import net.alkalines.radiumcode.agent.il.IlThinkingBlock
 import net.alkalines.radiumcode.agent.il.IlToolCallBlock
 import net.alkalines.radiumcode.agent.il.IlToolResultBlock
-import net.alkalines.radiumcode.agent.providers.ProviderRegistry
 
 data class AgentChatItem(
     val id: String,
@@ -30,10 +30,10 @@ data class AgentChatItem(
 }
 
 object AgentToolWindowPresenter {
-    fun modelLabel(registry: ProviderRegistry): String {
-        val model = registry.defaultModel ?: return "No model"
-        return model.modelId
-    }
+    const val NO_CONFIGURED_MODEL_LABEL: String = "No configured model"
+
+    fun modelLabel(selectedModel: IlModelDescriptor?): String =
+        selectedModel?.displayName ?: NO_CONFIGURED_MODEL_LABEL
 
     fun autoScrollSignal(items: List<AgentChatItem>): Int = items.sumOf { it.text.length } + items.size
 

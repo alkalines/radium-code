@@ -246,17 +246,48 @@ enum class IlCapability {
     STREAMING,
 }
 
+enum class IlReasoningEffort(val wireValue: String?) {
+    NONE(null),
+    MINIMAL("minimal"),
+    LOW("low"),
+    MEDIUM("medium"),
+    HIGH("high"),
+    XHIGH("xhigh");
+
+    companion object {
+        fun fromWireValue(value: String?): IlReasoningEffort? = when (value?.lowercase()) {
+            null -> null
+            "" -> NONE
+            "minimal" -> MINIMAL
+            "low" -> LOW
+            "medium" -> MEDIUM
+            "high" -> HIGH
+            "xhigh" -> XHIGH
+            else -> null
+        }
+    }
+}
+
+enum class IlModelSource { CATALOG, MANUAL }
+
 data class IlModelDescriptor(
+    val id: String,
     val providerId: String,
     val modelId: String,
     val displayName: String,
+    val maxInputTokens: Long?,
+    val maxOutputTokens: Long?,
+    val inputPricePerToken: Double?,
+    val outputPricePerToken: Double?,
+    val cacheReadPricePerToken: Double?,
+    val cacheWritePricePerToken: Double?,
     val capabilities: Set<IlCapability>,
-    val isDefault: Boolean = false,
+    val reasoningEffort: IlReasoningEffort?,
+    val source: IlModelSource,
 )
 
 data class IlGenerateRequest(
-    val providerId: String,
-    val modelId: String,
+    val model: IlModelDescriptor,
     val input: List<IlConversationTurn>,
     val tools: List<IlToolDefinition>,
     val toolChoice: IlToolChoice,
@@ -268,7 +299,10 @@ data class IlGenerateRequest(
     val continuation: IlContinuation?,
     val metadata: JsonObject,
     val providerOptions: JsonObject,
-)
+) {
+    val providerId: String get() = model.providerId
+    val modelId: String get() = model.modelId
+}
 
 enum class UsageMergeMode {
     REPLACE,

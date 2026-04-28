@@ -22,6 +22,16 @@ class PluginXmlRegistrationTest {
     }
 
     @Test
+    fun `registers the AgentModelConfigStore application service`() {
+        val pluginXml = Files.readString(Path.of("src/main/resources/META-INF/plugin.xml"))
+
+        assertTrue(
+            pluginXml.contains("""serviceImplementation="net.alkalines.radiumcode.agent.config.AgentModelConfigStore""""),
+            "plugin.xml must register AgentModelConfigStore as an applicationService"
+        )
+    }
+
+    @Test
     fun `registers notification group and removes marketplace placeholders`() {
         val pluginXml = Files.readString(Path.of("src/main/resources/META-INF/plugin.xml"))
 
