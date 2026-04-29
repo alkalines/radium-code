@@ -3,21 +3,22 @@ package net.alkalines.radiumcode
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PluginXmlRegistrationTest {
 
     @Test
-    fun `registers the OpenRouter provider under the plugin extension namespace`() {
+    fun `does not register concrete providers manually`() {
         val pluginXml = Files.readString(Path.of("src/main/resources/META-INF/plugin.xml"))
 
-        assertTrue(
-            pluginXml.contains("""<extensions defaultExtensionNs="net.alkalines.radiumcode">"""),
-            "plugin.xml must register custom provider extensions under net.alkalines.radiumcode"
+        assertFalse(
+            pluginXml.contains("<agentProvider"),
+            "provider implementations must be discovered from AgentProvider subclasses instead of plugin.xml entries"
         )
-        assertTrue(
-            pluginXml.contains("""<agentProvider implementationClass="net.alkalines.radiumcode.agent.providers.OpenRouterProvider"/>"""),
-            "plugin.xml must register OpenRouterProvider"
+        assertFalse(
+            pluginXml.contains("net.alkalines.radiumcode.agentProvider"),
+            "plugin.xml must not keep the legacy provider extension point"
         )
     }
 

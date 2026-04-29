@@ -83,23 +83,47 @@ class OpenRouterProvider internal constructor(
     private val httpClient: OkHttpClient = openRouterHttpClient(),
     private val catalogHttpClient: OkHttpClient = openRouterCatalogHttpClient(httpClient),
     private val apiKeyOverride: String? = null,
-    private val settingsLookup: () -> ProviderSettings? = {
-        runCatching { AgentModelConfigStore.getInstance().providerSettings(OPENROUTER_PROVIDER_ID) }.getOrNull()
+    private val settingsLookup: (String?) -> ProviderSettings? = { configuredModelId ->
+        runCatching {
+            val store = AgentModelConfigStore.getInstance()
+            configuredModelId?.let { store.providerSettingsForModel(it, OPENROUTER_PROVIDER_ID) }
+                ?: store.providerSettings(OPENROUTER_PROVIDER_ID)
+        }.getOrNull()
     },
 ) : AgentProvider() {
     constructor() : this(baseUrl = null)
 
     override val providerId = OPENROUTER_PROVIDER_ID
     override val displayName = "OpenRouter"
+    override val settingsFields = listOf(
+        ProviderSettingField(
+            key = ProviderSettingKeys.API_KEY,
+            label = "API key",
+            kind = ProviderSettingFieldKind.PASSWORD,
+            placeholder = "sk-or-...",
+        ),
+        ProviderSettingField(
+            key = ProviderSettingKeys.USE_CUSTOM_BASE_URL,
+            label = "Use custom base URL",
+            kind = ProviderSettingFieldKind.CHECKBOX,
+        ),
+        ProviderSettingField(
+            key = ProviderSettingKeys.BASE_URL,
+            label = "Base URL",
+            kind = ProviderSettingFieldKind.TEXT,
+            placeholder = "https://...",
+            visibleWhen = ProviderSettingKeys.USE_CUSTOM_BASE_URL to "true",
+        ),
+    )
 
     private val logger = Logger.getInstance(OpenRouterProvider::class.java)
     private val json = Json { ignoreUnknownKeys = true }
 
-    private fun resolveSettings(): ProviderSettings? = settingsLookup()
+    private fun resolveSettings(configuredModelId: String? = null): ProviderSettings? = settingsLookup(configuredModelId)
 
-    private fun resolveResponsesUrl(): HttpUrl {
+    private fun resolveResponsesUrl(configuredModelId: String): HttpUrl {
         baseUrl?.let { return it }
-        val settings = resolveSettings()
+        val settings = resolveSettings(configuredModelId)
         if (settings != null && settings.useCustomBaseUrl && !settings.baseUrl.isNullOrBlank()) {
             return endpointUrl(settings.baseUrl, "responses")
         }
@@ -123,7 +147,7 @@ class OpenRouterProvider internal constructor(
         }
     }
 
-    private fun resolveApiKey(): String? = apiKeyOverride ?: resolveSettings()?.apiKey
+    private fun resolveApiKey(configuredModelId: String): String? = apiKeyOverride ?: resolveSettings(configuredModelId)?.apiKey
 
     override suspend fun fetchAvailableModels(settings: ProviderSettings): Result<List<IlModelDescriptor>> =
         withContext(Dispatchers.IO) {
@@ -202,7 +226,7 @@ class OpenRouterProvider internal constructor(
 
     override fun stream(request: IlGenerateRequest): Flow<IlStreamEvent> = flow {
         val syntheticTurnId = "openrouter-turn-${System.currentTimeMillis()}"
-        val apiKey = resolveApiKey().orEmpty()
+        val apiKey = resolveApiKey(request.model.id).orEmpty()
         if (apiKey.isBlank()) {
             emit(TurnStarted("preflight.created", syntheticTurnId, IlRole.ASSISTANT, meta("preflight.created", requestIndex = request.requestIndex())))
             emit(StreamError("missing-key", syntheticTurnId, "OpenRouter API key is not configured. Open Config to add it.", meta("error", requestIndex = request.requestIndex())))
@@ -211,7 +235,7 @@ class OpenRouterProvider internal constructor(
 
         val body = buildRequestBody(request).toString()
         val httpRequest = Request.Builder()
-            .url(resolveResponsesUrl())
+            .url(resolveResponsesUrl(request.model.id))
             .header("Authorization", "Bearer $apiKey")
             .header("Content-Type", "application/json")
             .post(body.toRequestBody("application/json".toMediaType()))

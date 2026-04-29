@@ -15,6 +15,8 @@ import net.alkalines.radiumcode.agent.il.IlCapability
 import net.alkalines.radiumcode.agent.il.IlModelDescriptor
 import net.alkalines.radiumcode.agent.il.IlModelSource
 import net.alkalines.radiumcode.agent.il.IlReasoningEffort
+import net.alkalines.radiumcode.agent.providers.ProviderSettingFieldKind
+import net.alkalines.radiumcode.agent.providers.ProviderSettingKeys
 
 class AgentConfigToolWindowTest {
 
@@ -202,6 +204,65 @@ class AgentConfigToolWindowTest {
     }
 
     @Test
+    fun `provider setting fields update typed provider settings`() {
+        val initial = ProviderSettings(providerId = "openrouter")
+
+        val withApiKey = AgentConfigToolWindowContentModel.updateProviderSetting(
+            settings = initial,
+            key = ProviderSettingKeys.API_KEY,
+            value = "sk-test",
+        )
+        val withCustomBaseUrl = AgentConfigToolWindowContentModel.updateProviderSetting(
+            settings = withApiKey,
+            key = ProviderSettingKeys.USE_CUSTOM_BASE_URL,
+            value = "true",
+        )
+        val withBaseUrl = AgentConfigToolWindowContentModel.updateProviderSetting(
+            settings = withCustomBaseUrl,
+            key = ProviderSettingKeys.BASE_URL,
+            value = "https://proxy.example/api/v1",
+        )
+
+        assertEquals("sk-test", withBaseUrl.apiKey)
+        assertTrue(withBaseUrl.useCustomBaseUrl)
+        assertEquals("https://proxy.example/api/v1", withBaseUrl.baseUrl)
+    }
+
+    @Test
+    fun `provider setting fields can store provider specific extras`() {
+        val updated = AgentConfigToolWindowContentModel.updateProviderSetting(
+            settings = ProviderSettings(providerId = "custom"),
+            key = "project_id",
+            value = "radium-prod",
+        )
+
+        assertEquals("radium-prod", updated.extras["project_id"])
+    }
+
+    @Test
+    fun `provider setting field visibility follows dependency value`() {
+        val baseUrlField = net.alkalines.radiumcode.agent.providers.ProviderSettingField(
+            key = ProviderSettingKeys.BASE_URL,
+            label = "Base URL",
+            kind = ProviderSettingFieldKind.TEXT,
+            visibleWhen = ProviderSettingKeys.USE_CUSTOM_BASE_URL to "true",
+        )
+
+        assertFalse(
+            AgentConfigToolWindowContentModel.isProviderSettingFieldVisible(
+                field = baseUrlField,
+                settings = ProviderSettings(providerId = "openrouter", useCustomBaseUrl = false),
+            )
+        )
+        assertTrue(
+            AgentConfigToolWindowContentModel.isProviderSettingFieldVisible(
+                field = baseUrlField,
+                settings = ProviderSettings(providerId = "openrouter", useCustomBaseUrl = true),
+            )
+        )
+    }
+
+    @Test
     fun `provider settings save runs on supplied background dispatcher`() {
         val tmpDir = Files.createTempDirectory("radium-provider-save-test")
         val apiKeyStore = RecordingProviderApiKeyStore()
@@ -225,6 +286,7 @@ class AgentConfigToolWindowTest {
                         apiKey = "sk-test",
                         useCustomBaseUrl = false,
                         baseUrl = null,
+                        extras = mapOf("project_id" to "radium-prod"),
                     ),
                     dispatcher = dispatcher,
                 ).join()

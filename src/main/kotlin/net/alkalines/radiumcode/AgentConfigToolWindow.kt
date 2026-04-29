@@ -48,14 +48,16 @@ import net.alkalines.radiumcode.agent.il.IlModelDescriptor
 import net.alkalines.radiumcode.agent.il.IlModelSource
 import net.alkalines.radiumcode.agent.il.IlReasoningEffort
 import net.alkalines.radiumcode.agent.providers.AgentProvider
+import net.alkalines.radiumcode.agent.providers.ProviderSettingField
+import net.alkalines.radiumcode.agent.providers.ProviderSettingFieldKind
+import net.alkalines.radiumcode.agent.providers.ProviderSettingKeys
 import net.alkalines.radiumcode.agent.providers.ProviderRegistry
 import org.jetbrains.jewel.bridge.icon.fromPlatformIcon
-import org.jetbrains.jewel.ui.Orientation
 import org.jetbrains.jewel.ui.component.CheckboxRow
 import org.jetbrains.jewel.ui.component.DefaultButton
-import org.jetbrains.jewel.ui.component.Divider
 import org.jetbrains.jewel.ui.component.GroupHeader
 import org.jetbrains.jewel.ui.component.Icon
+import org.jetbrains.jewel.ui.component.ListComboBox
 import org.jetbrains.jewel.ui.component.OutlinedButton
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
@@ -117,6 +119,25 @@ internal object AgentConfigToolWindowContentModel {
             ?.let {
                 runCatching { BigDecimal(it).divide(priceScale).toDouble() }.getOrNull()
             }
+
+    fun providerSettingValue(settings: ProviderSettings, key: String): String = when (key) {
+        ProviderSettingKeys.API_KEY -> settings.apiKey.orEmpty()
+        ProviderSettingKeys.USE_CUSTOM_BASE_URL -> settings.useCustomBaseUrl.toString()
+        ProviderSettingKeys.BASE_URL -> settings.baseUrl.orEmpty()
+        else -> settings.extras[key].orEmpty()
+    }
+
+    fun updateProviderSetting(settings: ProviderSettings, key: String, value: String): ProviderSettings = when (key) {
+        ProviderSettingKeys.API_KEY -> settings.copy(apiKey = value.takeIf { it.isNotBlank() })
+        ProviderSettingKeys.USE_CUSTOM_BASE_URL -> settings.copy(useCustomBaseUrl = value.toBooleanStrictOrNull() ?: false)
+        ProviderSettingKeys.BASE_URL -> settings.copy(baseUrl = value.takeIf { it.isNotBlank() })
+        else -> settings.copy(extras = settings.extras + (key to value))
+    }
+
+    fun isProviderSettingFieldVisible(field: ProviderSettingField, settings: ProviderSettings): Boolean {
+        val dependency = field.visibleWhen ?: return true
+        return providerSettingValue(settings, dependency.first) == dependency.second
+    }
 }
 
 internal enum class ModelSearchTextChangeOrigin {
@@ -170,16 +191,6 @@ internal fun AgentConfigToolWindowContent() {
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        ProviderSection(
-            registry = registry,
-            settingsMap = providerSettingsMap,
-            store = store,
-            textColor = textColor,
-            placeholderColor = placeholderColor,
-        )
-
-        Divider(orientation = Orientation.Horizontal, color = borderColor)
-
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -225,8 +236,16 @@ internal fun AgentConfigToolWindowContent() {
                     borderColor = borderColor,
                     textColor = textColor,
                     placeholderColor = placeholderColor,
-                    onSave = { saved ->
-                        store.upsertConfiguredModel(saved)
+                    onSave = { saved, settings ->
+                        val resolved = store.upsertConfiguredModel(saved)
+                        launchProviderSettingsSave(
+                            scope = this,
+                            store = store,
+                            settings = settings.copy(
+                                providerId = resolved.providerId,
+                                configuredModelId = resolved.id,
+                            ),
+                        )
                         editing = null
                     },
                     onDelete = { id ->
@@ -236,98 +255,6 @@ internal fun AgentConfigToolWindowContent() {
                     onCancel = { editing = null },
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun ProviderSection(
-    registry: ProviderRegistry,
-    settingsMap: Map<String, ProviderSettings>,
-    store: AgentModelConfigStore,
-    textColor: Color,
-    placeholderColor: Color,
-) {
-    val coroutineScope = rememberCoroutineScope()
-    val providers = registry.allProviders
-    val initialProviderId = providers.firstOrNull()?.providerId.orEmpty()
-    var selectedProviderId by remember { mutableStateOf(initialProviderId) }
-    val current = settingsMap[selectedProviderId]
-        ?: ProviderSettings(providerId = selectedProviderId)
-
-    val apiKeyState = rememberTextFieldState(initialText = current.apiKey.orEmpty())
-    val baseUrlState = rememberTextFieldState(initialText = current.baseUrl.orEmpty())
-    var useCustomBaseUrl by remember(selectedProviderId) { mutableStateOf(current.useCustomBaseUrl) }
-
-    LaunchedEffect(selectedProviderId, current.apiKey, current.baseUrl, current.useCustomBaseUrl) {
-        apiKeyState.edit { replace(0, length, current.apiKey.orEmpty()) }
-        baseUrlState.edit { replace(0, length, current.baseUrl.orEmpty()) }
-        useCustomBaseUrl = current.useCustomBaseUrl
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        GroupHeader(AgentMessageBundle.message("toolwindow.AgentToolWindow.config.providerSection"))
-
-        if (providers.size > 1) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    AgentMessageBundle.message("toolwindow.AgentToolWindow.config.provider"),
-                    style = TextStyle(color = textColor, fontSize = 13.sp)
-                )
-                providers.forEach { provider ->
-                    val isSelected = provider.providerId == selectedProviderId
-                    if (isSelected) {
-                        DefaultButton(onClick = {}) { Text(provider.displayName) }
-                    } else {
-                        OutlinedButton(onClick = { selectedProviderId = provider.providerId }) {
-                            Text(provider.displayName)
-                        }
-                    }
-                }
-            }
-        } else if (providers.size == 1) {
-            Text(providers.first().displayName, style = TextStyle(color = textColor, fontSize = 14.sp))
-        }
-
-        FormFieldLabel(AgentMessageBundle.message("toolwindow.AgentToolWindow.config.apiKey"), textColor)
-        TextField(
-            state = apiKeyState,
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("sk-or-...", style = TextStyle(color = placeholderColor)) },
-        )
-
-        CheckboxRow(
-            text = AgentMessageBundle.message("toolwindow.AgentToolWindow.config.useCustomBaseUrl"),
-            checked = useCustomBaseUrl,
-            onCheckedChange = { useCustomBaseUrl = it },
-        )
-
-        AnimatedVisibility(visible = useCustomBaseUrl) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                FormFieldLabel(AgentMessageBundle.message("toolwindow.AgentToolWindow.config.baseUrl"), textColor)
-                TextField(
-                    state = baseUrlState,
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("https://...", style = TextStyle(color = placeholderColor)) },
-                )
-            }
-        }
-
-        DefaultButton(
-            onClick = {
-                launchProviderSettingsSave(
-                    scope = coroutineScope,
-                    store = store,
-                    settings = ProviderSettings(
-                        providerId = selectedProviderId,
-                        apiKey = apiKeyState.text.toString().takeIf { it.isNotBlank() },
-                        useCustomBaseUrl = useCustomBaseUrl,
-                        baseUrl = baseUrlState.text.toString().takeIf { it.isNotBlank() },
-                    ),
-                )
-            }
-        ) {
-            Text(AgentMessageBundle.message("toolwindow.AgentToolWindow.config.saveProviderSettings"))
         }
     }
 }
@@ -421,7 +348,7 @@ internal data class ModelFormState(
 
     fun withCatalogSelection(selected: IlModelDescriptor): ModelFormState = copy(
         modelId = selected.modelId,
-        displayName = if (displayName.isBlank()) selected.displayName else displayName,
+        displayName = displayName.ifBlank { selected.displayName },
         maxInputTokens = selected.maxInputTokens?.toString().orEmpty(),
         maxOutputTokens = selected.maxOutputTokens?.toString().orEmpty(),
         inputPrice = AgentConfigToolWindowContentModel.formatPricePerMillionTokens(selected.inputPricePerToken),
@@ -483,7 +410,7 @@ private fun ModelFormCard(
     borderColor: Color,
     textColor: Color,
     placeholderColor: Color,
-    onSave: (IlModelDescriptor) -> Unit,
+    onSave: CoroutineScope.(IlModelDescriptor, ProviderSettings) -> Unit,
     onDelete: (String) -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -496,7 +423,15 @@ private fun ModelFormCard(
     var catalogError by remember(form.providerId) { mutableStateOf<String?>(null) }
 
     val provider: AgentProvider? = registry.providerOrNull(form.providerId)
-    val settings = providerSettingsMap[form.providerId] ?: ProviderSettings(providerId = form.providerId)
+    val storedSettings = form.id.takeIf { it.isNotBlank() }
+        ?.let { providerSettingsMap[ProviderSettings.modelStorageKey(it)] }
+        ?.takeIf { it.providerId == form.providerId }
+        ?: ProviderSettings(providerId = form.providerId, configuredModelId = form.id.takeIf { it.isNotBlank() })
+    var providerSettings by remember(form.providerId, form.id) { mutableStateOf(storedSettings) }
+
+    LaunchedEffect(form.providerId, storedSettings) {
+        providerSettings = storedSettings
+    }
 
     val refreshCatalog: () -> Unit = {
         if (provider != null) {
@@ -505,7 +440,7 @@ private fun ModelFormCard(
             catalogLoading = true
             catalogError = null
             catalogRefreshJob = coroutineScope.launch {
-                val result = provider.fetchAvailableModels(settings)
+                val result = provider.fetchAvailableModels(providerSettings)
                 if (!catalogRefreshTracker.accepts(requestId)) {
                     return@launch
                 }
@@ -518,7 +453,7 @@ private fun ModelFormCard(
         }
     }
 
-    LaunchedEffect(form.providerId, settings.apiKey, settings.useCustomBaseUrl, settings.baseUrl) {
+    LaunchedEffect(form.providerId, storedSettings) {
         refreshCatalog()
     }
 
@@ -530,6 +465,28 @@ private fun ModelFormCard(
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        FormFieldLabel(AgentMessageBundle.message("toolwindow.AgentToolWindow.config.provider"), textColor)
+        ProviderPicker(
+            providers = registry.allProviders,
+            selectedProviderId = form.providerId,
+            textColor = textColor,
+            onSelect = { selected ->
+                form = form.copy(providerId = selected.providerId, modelId = "", displayName = "", source = IlModelSource.MANUAL)
+            },
+        )
+
+        provider?.let { selectedProvider ->
+            ProviderSettingsFields(
+                provider = selectedProvider,
+                settings = providerSettings,
+                onChange = { key, value ->
+                    providerSettings = AgentConfigToolWindowContentModel.updateProviderSetting(providerSettings, key, value)
+                },
+                textColor = textColor,
+                placeholderColor = placeholderColor,
+            )
+        }
+
         FormFieldLabel(AgentMessageBundle.message("toolwindow.AgentToolWindow.config.displayName"), textColor)
         SimpleStringField(form.displayName, onChange = { form = form.copy(displayName = it) })
 
@@ -610,7 +567,7 @@ private fun ModelFormCard(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             DefaultButton(
                 enabled = form.isValid(),
-                onClick = { onSave(form.toDescriptor()) },
+                onClick = { coroutineScope.onSave(form.toDescriptor(), providerSettings) },
             ) {
                 Text(AgentMessageBundle.message("toolwindow.AgentToolWindow.config.save"))
             }
@@ -628,7 +585,71 @@ private fun ModelFormCard(
 }
 
 @Composable
-private fun SimpleStringField(value: String, onChange: (String) -> Unit) {
+private fun ProviderPicker(
+    providers: List<AgentProvider>,
+    selectedProviderId: String,
+    textColor: Color,
+    onSelect: (AgentProvider) -> Unit,
+) {
+    if (providers.isEmpty()) {
+        Text(
+            AgentMessageBundle.message("toolwindow.AgentToolWindow.config.selectProvider"),
+            style = TextStyle(color = textColor, fontSize = 14.sp),
+        )
+        return
+    }
+
+    val selectedIndex = providers.indexOfFirst { it.providerId == selectedProviderId }
+        .takeIf { it >= 0 }
+        ?: 0
+    ListComboBox(
+        items = providers.map { it.displayName },
+        selectedIndex = selectedIndex,
+        onSelectedItemChange = { index ->
+            providers.getOrNull(index)?.let(onSelect)
+        },
+        modifier = Modifier.fillMaxWidth(),
+        textStyle = TextStyle(color = textColor, fontSize = 14.sp),
+    )
+}
+
+@Composable
+private fun ProviderSettingsFields(
+    provider: AgentProvider,
+    settings: ProviderSettings,
+    onChange: (String, String) -> Unit,
+    textColor: Color,
+    placeholderColor: Color,
+) {
+    provider.settingsFields.forEach { field ->
+        if (AgentConfigToolWindowContentModel.isProviderSettingFieldVisible(field, settings)) {
+            when (field.kind) {
+                ProviderSettingFieldKind.CHECKBOX -> CheckboxRow(
+                    text = field.label,
+                    checked = AgentConfigToolWindowContentModel.providerSettingValue(settings, field.key).toBooleanStrictOrNull() ?: false,
+                    onCheckedChange = { onChange(field.key, it.toString()) },
+                )
+                ProviderSettingFieldKind.TEXT, ProviderSettingFieldKind.PASSWORD -> {
+                    FormFieldLabel(field.label, textColor)
+                    SimpleStringField(
+                        value = AgentConfigToolWindowContentModel.providerSettingValue(settings, field.key),
+                        onChange = { onChange(field.key, it) },
+                        placeholder = field.placeholder,
+                        placeholderColor = placeholderColor,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SimpleStringField(
+    value: String,
+    onChange: (String) -> Unit,
+    placeholder: String? = null,
+    placeholderColor: Color? = null,
+) {
     val state = rememberTextFieldState(initialText = value)
     LaunchedEffect(value) {
         if (state.text.toString() != value) {
@@ -638,7 +659,13 @@ private fun SimpleStringField(value: String, onChange: (String) -> Unit) {
     LaunchedEffect(state) {
         snapshotFlow { state.text.toString() }.collect { onChange(it) }
     }
-    TextField(state = state, modifier = Modifier.fillMaxWidth())
+    TextField(
+        state = state,
+        modifier = Modifier.fillMaxWidth(),
+        placeholder = placeholder?.let {
+            { Text(it, style = TextStyle(color = placeholderColor ?: Color.Unspecified)) }
+        },
+    )
 }
 
 @Composable

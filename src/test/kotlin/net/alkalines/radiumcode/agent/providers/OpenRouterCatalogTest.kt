@@ -5,7 +5,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import net.alkalines.radiumcode.agent.config.ProviderSettings
 import net.alkalines.radiumcode.agent.il.IlCapability
@@ -19,6 +18,22 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 
 class OpenRouterCatalogTest {
+
+    @Test
+    fun `declares settings fields required by the configuration UI`() {
+        val provider = OpenRouterProvider()
+
+        assertEquals(
+            listOf(
+                ProviderSettingKeys.API_KEY,
+                ProviderSettingKeys.USE_CUSTOM_BASE_URL,
+                ProviderSettingKeys.BASE_URL,
+            ),
+            provider.settingsFields.map { it.key },
+        )
+        assertEquals(ProviderSettingFieldKind.PASSWORD, provider.settingsFields[0].kind)
+        assertEquals(ProviderSettingKeys.USE_CUSTOM_BASE_URL to "true", provider.settingsFields[2].visibleWhen)
+    }
 
     @Test
     fun `parses context length max output tokens and pricing from catalog payload`() {
@@ -127,10 +142,13 @@ class OpenRouterCatalogTest {
                     .addHeader("Content-Type", "text/event-stream")
                     .setBody("data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n")
             )
+            var capturedConfiguredModelId: String? = null
             val provider = OpenRouterProvider(
-                settingsLookup = {
+                settingsLookup = { configuredModelId ->
+                    capturedConfiguredModelId = configuredModelId
                     ProviderSettings(
                         providerId = "openrouter",
+                        configuredModelId = configuredModelId,
                         apiKey = "test-key",
                         useCustomBaseUrl = true,
                         baseUrl = server.url("/api/v1").toString().removeSuffix("/"),
@@ -141,6 +159,7 @@ class OpenRouterCatalogTest {
             provider.stream(request()).collect { }
 
             assertEquals("/api/v1/responses", server.takeRequest().path)
+            assertEquals("id", capturedConfiguredModelId)
         }
     }
 

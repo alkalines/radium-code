@@ -3,7 +3,6 @@ package net.alkalines.radiumcode.agent.providers
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.extensions.ExtensionPointName
 
 class ProviderRegistry private constructor(
     private val providers: List<AgentProvider>,
@@ -15,10 +14,9 @@ class ProviderRegistry private constructor(
 
     companion object {
         private val logger = Logger.getInstance(ProviderRegistry::class.java)
-        private val extensionPointName = ExtensionPointName<AgentProviderBean>("net.alkalines.radiumcode.agentProvider")
 
         val lazyInstance: ProviderRegistry by lazy {
-            fromProviders(extensionPointName.extensionList.map { it.instantiate() })
+            fromProviders(ProviderDiscovery.discover())
         }
 
         fun fromProviders(providers: List<AgentProvider>): ProviderRegistry {
@@ -28,7 +26,7 @@ class ProviderRegistry private constructor(
                     "Duplicate providerId: ${provider.providerId}"
                 }
             }
-            return ProviderRegistry(providers)
+            return ProviderRegistry(providers.sortedBy { it.displayName.lowercase() })
         }
 
         fun notifyRegistryFailure(message: String) {

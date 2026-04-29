@@ -49,11 +49,19 @@ class AgentModelConfigStoreTest {
     @Test
     fun `delete configured model removes it and clears last selected if it pointed there`() {
         val saved = store.upsertConfiguredModel(sampleDescriptor())
+        store.upsertProviderSettings(
+            ProviderSettings(
+                configuredModelId = saved.id,
+                providerId = saved.providerId,
+                apiKey = "sk-model",
+            )
+        )
         store.setLastSelectedModel(saved.id)
 
         store.deleteConfiguredModel(saved.id)
 
         assertTrue(store.configuredModels.value.isEmpty())
+        assertNull(store.providerSettings.value[ProviderSettings.modelStorageKey(saved.id)])
         assertNull(store.lastSelectedModelId.value)
     }
 
@@ -65,6 +73,7 @@ class AgentModelConfigStoreTest {
                 apiKey = "sk-test",
                 useCustomBaseUrl = true,
                 baseUrl = "https://example/api",
+                extras = mapOf("project_id" to "radium-prod"),
             )
         )
 
@@ -73,6 +82,40 @@ class AgentModelConfigStoreTest {
         assertEquals("sk-test", settings.apiKey)
         assertTrue(settings.useCustomBaseUrl)
         assertEquals("https://example/api", settings.baseUrl)
+        assertEquals("radium-prod", settings.extras["project_id"])
+    }
+
+    @Test
+    fun `provider settings are scoped by configured model when model id is present`() {
+        val first = store.upsertConfiguredModel(sampleDescriptor(modelId = "minimax/minimax-m2.7"))
+        val second = store.upsertConfiguredModel(sampleDescriptor(modelId = "moonshotai/kimi-k2.6"))
+
+        store.upsertProviderSettings(
+            ProviderSettings(
+                configuredModelId = first.id,
+                providerId = "openrouter",
+                apiKey = "sk-first",
+                useCustomBaseUrl = true,
+                baseUrl = "https://first.example/api",
+            )
+        )
+        store.upsertProviderSettings(
+            ProviderSettings(
+                configuredModelId = second.id,
+                providerId = "openrouter",
+                apiKey = "sk-second",
+                useCustomBaseUrl = true,
+                baseUrl = "https://second.example/api",
+            )
+        )
+
+        val firstSettings = store.providerSettingsForModel(first.id, "openrouter")
+        val secondSettings = store.providerSettingsForModel(second.id, "openrouter")
+
+        assertEquals("sk-first", firstSettings?.apiKey)
+        assertEquals("https://first.example/api", firstSettings?.baseUrl)
+        assertEquals("sk-second", secondSettings?.apiKey)
+        assertEquals("https://second.example/api", secondSettings?.baseUrl)
     }
 
     @Test

@@ -10,6 +10,7 @@ import com.intellij.openapi.diagnostic.Logger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.json.Json
 import net.alkalines.radiumcode.agent.il.IlCapability
 import net.alkalines.radiumcode.agent.il.IlModelDescriptor
 import net.alkalines.radiumcode.agent.il.IlModelSource
@@ -55,6 +56,7 @@ class AgentModelConfigStore @JvmOverloads internal constructor(
 ) : Disposable {
 
     private val logger = Logger.getInstance(AgentModelConfigStore::class.java)
+    private val json = Json { ignoreUnknownKeys = true }
     private val database: Database by lazy {
         Files.createDirectories(databasePath.parent)
         Database.connect(
@@ -94,6 +96,10 @@ class AgentModelConfigStore @JvmOverloads internal constructor(
     fun providerSettings(providerId: String): ProviderSettings? =
         _providerSettings.value[providerId]
 
+    fun providerSettingsForModel(configuredModelId: String, providerId: String): ProviderSettings? =
+        _providerSettings.value[ProviderSettings.modelStorageKey(configuredModelId)]
+            ?: providerSettings(providerId)
+
     fun upsertConfiguredModel(model: IlModelDescriptor): IlModelDescriptor {
         ensureInitialized()
         val now = System.currentTimeMillis()
@@ -132,8 +138,11 @@ class AgentModelConfigStore @JvmOverloads internal constructor(
         ensureInitialized()
         transaction(database) {
             ConfiguredModelsTable.deleteWhere { ConfiguredModelsTable.id eq id }
+            ModelProviderSettingsTable.deleteWhere { ModelProviderSettingsTable.configuredModelId eq id }
         }
+        apiKeyStore.set(ProviderSettings.modelStorageKey(id), null)
         reloadConfiguredModels()
+        reloadProviderSettings()
         if (_lastSelectedModelId.value == id) {
             setLastSelectedModel(null)
         }
@@ -142,14 +151,27 @@ class AgentModelConfigStore @JvmOverloads internal constructor(
     fun upsertProviderSettings(settings: ProviderSettings) {
         ensureInitialized()
         val now = System.currentTimeMillis()
-        apiKeyStore.set(settings.providerId, settings.apiKey?.takeIf { it.isNotBlank() })
+        apiKeyStore.set(settings.storageKey, settings.apiKey?.takeIf { it.isNotBlank() })
         transaction(database) {
-            ProviderSettingsTable.upsert {
-                it[providerId] = settings.providerId
-                it[apiKey] = null
-                it[useCustomBaseUrl] = settings.useCustomBaseUrl
-                it[baseUrl] = settings.baseUrl
-                it[updatedAt] = now
+            if (settings.configuredModelId == null) {
+                ProviderSettingsTable.upsert {
+                    it[providerId] = settings.providerId
+                    it[apiKey] = null
+                    it[useCustomBaseUrl] = settings.useCustomBaseUrl
+                    it[baseUrl] = settings.baseUrl
+                    it[extrasJson] = json.encodeToString(settings.extras)
+                    it[updatedAt] = now
+                }
+            } else {
+                ModelProviderSettingsTable.upsert {
+                    it[configuredModelId] = settings.configuredModelId
+                    it[providerId] = settings.providerId
+                    it[apiKey] = null
+                    it[useCustomBaseUrl] = settings.useCustomBaseUrl
+                    it[baseUrl] = settings.baseUrl
+                    it[extrasJson] = json.encodeToString(settings.extras)
+                    it[updatedAt] = now
+                }
             }
         }
         reloadProviderSettings()
@@ -184,9 +206,9 @@ class AgentModelConfigStore @JvmOverloads internal constructor(
                 return
             }
             transaction(database) {
-                SchemaUtils.create(ProviderSettingsTable, ConfiguredModelsTable, AppSettingsTable)
+                SchemaUtils.create(ProviderSettingsTable, ModelProviderSettingsTable, ConfiguredModelsTable, AppSettingsTable)
                 @Suppress("DEPRECATION")
-                SchemaUtils.createMissingTablesAndColumns(ProviderSettingsTable, ConfiguredModelsTable, AppSettingsTable)
+                SchemaUtils.createMissingTablesAndColumns(ProviderSettingsTable, ModelProviderSettingsTable, ConfiguredModelsTable, AppSettingsTable)
             }
             initialized = true
         }
@@ -200,7 +222,7 @@ class AgentModelConfigStore @JvmOverloads internal constructor(
 
     private fun reloadProviderSettings() {
         ensureInitialized()
-        val rows = transaction(database) {
+        val legacyRows = transaction(database) {
             ProviderSettingsTable.selectAll().map { row ->
                 val providerId = row[ProviderSettingsTable.providerId]
                 ProviderSettings(
@@ -208,10 +230,28 @@ class AgentModelConfigStore @JvmOverloads internal constructor(
                     apiKey = apiKeyStore.get(providerId),
                     useCustomBaseUrl = row[ProviderSettingsTable.useCustomBaseUrl],
                     baseUrl = row[ProviderSettingsTable.baseUrl],
+                    extras = runCatching {
+                        json.decodeFromString<Map<String, String>>(row[ProviderSettingsTable.extrasJson])
+                    }.getOrDefault(emptyMap()),
                 )
             }
         }
-        _providerSettings.value = rows.associateBy { it.providerId }
+        val modelRows = transaction(database) {
+            ModelProviderSettingsTable.selectAll().map { row ->
+                val configuredModelId = row[ModelProviderSettingsTable.configuredModelId]
+                ProviderSettings(
+                    configuredModelId = configuredModelId,
+                    providerId = row[ModelProviderSettingsTable.providerId],
+                    apiKey = apiKeyStore.get(ProviderSettings.modelStorageKey(configuredModelId)),
+                    useCustomBaseUrl = row[ModelProviderSettingsTable.useCustomBaseUrl],
+                    baseUrl = row[ModelProviderSettingsTable.baseUrl],
+                    extras = runCatching {
+                        json.decodeFromString<Map<String, String>>(row[ModelProviderSettingsTable.extrasJson])
+                    }.getOrDefault(emptyMap()),
+                )
+            }
+        }
+        _providerSettings.value = (legacyRows + modelRows).associateBy { it.storageKey }
     }
 
     private fun reloadConfiguredModels() {
