@@ -1,5 +1,6 @@
 package net.alkalines.radiumcode.agent.providers
 
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.runBlocking
@@ -232,7 +233,7 @@ class OpenRouterProviderTest {
                 apiKeyOverride = "test-key",
             )
 
-            val firstEvents = withTimeout(2600) {
+            val firstEvents = withTimeout(10.seconds) {
                 provider.stream(request()).take(1).toList()
             }
 

@@ -2,6 +2,7 @@ package net.alkalines.radiumcode.agent.runtime
 
 import com.intellij.openapi.Disposable
 import java.util.UUID
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -188,141 +189,144 @@ class AgentRuntime(
     }
 
     private suspend fun generateLoop(runId: String, requestIndex: Int) {
-        if (requestIndex >= config.maxIterations) {
-            val activeAssistantTurnId = synchronized(stateLock) {
+        var currentRequestIndex = requestIndex
+        while (true) {
+            if (currentRequestIndex >= config.maxIterations) {
+                val activeAssistantTurnId = synchronized(stateLock) {
+                    if (_state.value.activeRunId != runId) {
+                        null
+                    } else {
+                        _state.value.activeAssistantTurnId
+                    }
+                } ?: return
+                applyEventIfActive(
+                    runId,
+                    currentRequestIndex,
+                    StreamError(
+                        eventId = "iteration-limit",
+                        turnId = activeAssistantTurnId,
+                        message = "Iteration limit reached",
+                        meta = IlMeta.openrouter("iteration_limit")
+                    )
+                )
+                finishRun(runId)
+                return
+            }
+
+            val requestContext = synchronized(stateLock) {
                 if (_state.value.activeRunId != runId) {
                     null
                 } else {
-                    _state.value.activeAssistantTurnId
+                    buildRequestContext(currentRequestIndex)
                 }
             } ?: return
-            applyEventIfActive(
-                runId,
-                requestIndex,
-                StreamError(
-                    eventId = "iteration-limit",
-                    turnId = activeAssistantTurnId,
-                    message = "Iteration limit reached",
-                    meta = IlMeta.openrouter("iteration_limit")
+
+            try {
+                requestContext.provider.stream(requestContext.request).collect { event ->
+                    applyEventIfActive(runId, currentRequestIndex, event)
+                }
+            } catch (exception: Exception) {
+                val assistantTurnId = synchronized(stateLock) {
+                    if (_state.value.activeRunId != runId) {
+                        null
+                    } else {
+                        _state.value.activeAssistantTurnId ?: "provider-error-${UUID.randomUUID()}".also { turnId ->
+                            val started = stampEvent(
+                                TurnStarted("provider.exception", turnId, IlRole.ASSISTANT, IlMeta.openrouter("provider.exception")),
+                                currentRequestIndex
+                            ) as TurnStarted
+                            currentSession = reducer.apply(currentSession, started)
+                            publishLocked(
+                                currentSession,
+                                _state.value.copy(
+                                    session = currentSession,
+                                    activeAssistantTurnId = turnId,
+                                )
+                            )
+                        }
+                    }
+                } ?: return
+
+                applyEventIfActive(
+                    runId,
+                    currentRequestIndex,
+                    StreamError(
+                        eventId = "provider.exception",
+                        turnId = assistantTurnId,
+                        message = exception.message ?: exception.cause?.message ?: exception.toString(),
+                        meta = IlMeta.openrouter("provider.exception")
+                    )
                 )
-            )
-            finishRun(runId)
-            return
-        }
-
-        val requestContext = synchronized(stateLock) {
-            if (_state.value.activeRunId != runId) {
-                null
-            } else {
-                buildRequestContext(requestIndex)
+                finishRun(runId)
+                return
             }
-        } ?: return
 
-        try {
-            requestContext.provider.stream(requestContext.request).collect { event ->
-                applyEventIfActive(runId, requestIndex, event)
-            }
-        } catch (exception: Exception) {
-            val assistantTurnId = synchronized(stateLock) {
+            val loopState = synchronized(stateLock) {
                 if (_state.value.activeRunId != runId) {
                     null
                 } else {
-                    _state.value.activeAssistantTurnId ?: "provider-error-${UUID.randomUUID()}".also { turnId ->
-                        val started = stampEvent(
-                            TurnStarted("provider.exception", turnId, IlRole.ASSISTANT, IlMeta.openrouter("provider.exception")),
-                            requestIndex
-                        ) as TurnStarted
-                        currentSession = reducer.apply(currentSession, started)
-                        publishLocked(
-                            currentSession,
-                            _state.value.copy(
-                                session = currentSession,
-                                activeAssistantTurnId = turnId,
-                            )
+                    val assistantTurnId = _state.value.activeAssistantTurnId
+                    val assistantTurn = assistantTurnId?.let { id -> currentSession.turns.firstOrNull { it.id == id } }
+                    if (assistantTurnId == null || assistantTurn == null) {
+                        null
+                    } else {
+                        PostStreamState(
+                            assistantTurnId = assistantTurnId,
+                            assistantTurn = assistantTurn,
+                            allowParallelToolCalls = requestContext.request.allowParallelToolCalls,
+                            pendingCalls = reducer.pendingToolCalls(currentSession, assistantTurnId),
                         )
                     }
                 }
             } ?: return
 
-            applyEventIfActive(
-                runId,
-                requestIndex,
-                StreamError(
-                    eventId = "provider.exception",
-                    turnId = assistantTurnId,
-                    message = exception.message ?: exception.cause?.message ?: exception.toString(),
-                    meta = IlMeta.openrouter("provider.exception")
-                )
-            )
-            finishRun(runId)
-            return
-        }
-
-        val loopState = synchronized(stateLock) {
-            if (_state.value.activeRunId != runId) {
-                null
-            } else {
-                val assistantTurnId = _state.value.activeAssistantTurnId
-                val assistantTurn = assistantTurnId?.let { id -> currentSession.turns.firstOrNull { it.id == id } }
-                if (assistantTurnId == null || assistantTurn == null) {
-                    null
-                } else {
-                    PostStreamState(
-                        assistantTurnId = assistantTurnId,
-                        assistantTurn = assistantTurn,
-                        allowParallelToolCalls = requestContext.request.allowParallelToolCalls,
-                        pendingCalls = reducer.pendingToolCalls(currentSession, assistantTurnId),
-                    )
-                }
-            }
-        } ?: return
-
-        if (!loopState.assistantTurn.willContinue) {
-            finishRun(runId)
-            return
-        }
-        if (loopState.pendingCalls.isEmpty()) {
-            finishRun(runId)
-            return
-        }
-
-        val results = if (loopState.allowParallelToolCalls) {
-            coroutineScope {
-                loopState.pendingCalls.map { toolCall ->
-                    async {
-                        executeTool(toolCall)
-                    }
-                }.awaitAll()
-            }
-        } else {
-            loopState.pendingCalls.map { executeTool(it) }
-        }
-
-        for ((toolCall, outputPayload, isError) in results) {
-            val applied = applyEventIfActive(
-                runId,
-                requestIndex,
-                ToolResultAdded(
-                    eventId = "tool-result-${toolCall.callId ?: toolCall.id}",
-                    turnId = loopState.assistantTurnId,
-                    callId = toolCall.callId ?: toolCall.id,
-                    toolName = toolCall.toolName ?: "tool",
-                    outputPayload = outputPayload,
-                    isError = isError,
-                    meta = IlMeta.openrouter("tool_result")
-                )
-            )
-            if (!applied) {
+            if (!loopState.assistantTurn.willContinue) {
+                finishRun(runId)
                 return
             }
-        }
+            if (loopState.pendingCalls.isEmpty()) {
+                finishRun(runId)
+                return
+            }
 
-        generateLoop(runId, requestIndex + 1)
+            val results = if (loopState.allowParallelToolCalls) {
+                coroutineScope {
+                    loopState.pendingCalls.map { toolCall ->
+                        async {
+                            executeTool(toolCall)
+                        }
+                    }.awaitAll()
+                }
+            } else {
+                loopState.pendingCalls.map { executeTool(it) }
+            }
+
+            for ((toolCall, outputPayload, isError) in results) {
+                val applied = applyEventIfActive(
+                    runId,
+                    currentRequestIndex,
+                    ToolResultAdded(
+                        eventId = "tool-result-${toolCall.callId ?: toolCall.id}",
+                        turnId = loopState.assistantTurnId,
+                        callId = toolCall.callId ?: toolCall.id,
+                        toolName = toolCall.toolName ?: "tool",
+                        outputPayload = outputPayload,
+                        isError = isError,
+                        meta = IlMeta.openrouter("tool_result")
+                    )
+                )
+                if (!applied) {
+                    return
+                }
+            }
+
+            currentRequestIndex++
+        }
     }
 
     private suspend fun executeTool(toolCall: IlToolCallBlock): Triple<IlToolCallBlock, String, Boolean> {
         val result = try {
-            withTimeoutOrNull(config.toolExecutionTimeoutMs) {
+            withTimeoutOrNull(config.toolExecutionTimeoutMs.milliseconds) {
                 toolExecutor.execute(toolCall)
             } ?: ToolExecutionResult("""{"ok":false,"error":"timeout"}""", true)
         } catch (exception: CancellationException) {

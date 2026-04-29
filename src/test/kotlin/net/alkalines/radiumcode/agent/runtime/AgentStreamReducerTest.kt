@@ -164,6 +164,23 @@ class AgentStreamReducerTest {
         assertTrue(reducer.pendingToolCalls(session, TURN_ID).isEmpty())
     }
 
+    @Test
+    fun `uses block id as pending tool call id when provider omits call id`() {
+        val reducer = AgentStreamReducer()
+        var session = IlConversationSession()
+
+        session = reducer.apply(session, turnStarted())
+        session = reducer.apply(session, blockStarted("tool-1", IlBlockKind.TOOL_CALL, initialToolName = "lookup"))
+        session = reducer.apply(session, ToolCallArgumentsDelta(eventId = "args-1", turnId = TURN_ID, blockId = "tool-1", delta = "{\"query\":\"one\"}", meta = meta()))
+        session = reducer.apply(session, ToolCallCompleted(eventId = "done-1", turnId = TURN_ID, blockId = "tool-1", meta = meta()))
+        session = reducer.apply(session, TurnCompleted(eventId = "complete", turnId = TURN_ID, finishReason = IlFinishReason.TOOL_CALL, rawReason = "tool", willContinue = true, meta = meta()))
+
+        assertEquals(listOf("tool-1"), reducer.pendingToolCalls(session, TURN_ID).map { it.callId ?: it.id })
+
+        session = reducer.apply(session, ToolResultAdded(eventId = "result-1", turnId = TURN_ID, callId = "tool-1", toolName = "lookup", outputPayload = "{\"ok\":true}", isError = false, meta = meta()))
+        assertTrue(reducer.pendingToolCalls(session, TURN_ID).isEmpty())
+    }
+
     private fun turnStarted() = TurnStarted(
         eventId = "turn-start",
         turnId = TURN_ID,

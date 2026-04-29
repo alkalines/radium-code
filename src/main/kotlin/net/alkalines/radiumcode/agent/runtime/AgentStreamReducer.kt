@@ -67,8 +67,7 @@ class AgentStreamReducer {
         val assistantTurn = session.turns.firstOrNull { it.id == assistantTurnId } ?: return emptyList()
         val resolvedCallIds = resolvedCallIdsForTurn(session, assistantTurn)
         return assistantTurn.blocks.filterIsInstance<IlToolCallBlock>().filter { call ->
-            val callId = call.callId ?: return@filter false
-            callId !in resolvedCallIds
+            call.effectiveCallId() !in resolvedCallIds
         }
     }
 
@@ -127,11 +126,11 @@ class AgentStreamReducer {
 
     private fun addToolResult(session: IlConversationSession, event: ToolResultAdded): IlConversationSession {
         val assistantTurn = session.turns.firstOrNull { it.id == event.turnId } ?: return session
-        val assistantCallIds = assistantTurn.blocks.filterIsInstance<IlToolCallBlock>().mapNotNull { it.callId }.toSet()
+        val assistantCallIds = assistantTurn.blocks.filterIsInstance<IlToolCallBlock>().map { it.effectiveCallId() }.toSet()
         if (event.callId !in assistantCallIds) {
             return failTurn(session, assistantTurn.id, "Unknown tool result for callId ${event.callId}", event.meta)
         }
-        val pendingCallIds = pendingToolCalls(session, assistantTurn.id).mapNotNull { it.callId }.toSet()
+        val pendingCallIds = pendingToolCalls(session, assistantTurn.id).map { it.effectiveCallId() }.toSet()
         if (event.callId !in pendingCallIds) {
             return failTurn(session, assistantTurn.id, "Duplicate tool result for callId ${event.callId}", event.meta)
         }
@@ -222,7 +221,7 @@ class AgentStreamReducer {
         session: IlConversationSession,
         turn: IlConversationTurn,
     ): Set<String> {
-        val assistantCallIds = turn.blocks.filterIsInstance<IlToolCallBlock>().mapNotNull { it.callId }.toSet()
+        val assistantCallIds = turn.blocks.filterIsInstance<IlToolCallBlock>().map { it.effectiveCallId() }.toSet()
         if (assistantCallIds.isEmpty()) {
             return emptySet()
         }
@@ -235,4 +234,6 @@ class AgentStreamReducer {
             .filter { it in assistantCallIds }
             .toSet()
     }
+
+    private fun IlToolCallBlock.effectiveCallId(): String = callId ?: id
 }

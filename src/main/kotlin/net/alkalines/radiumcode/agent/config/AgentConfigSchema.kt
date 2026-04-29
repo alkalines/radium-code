@@ -4,7 +4,6 @@ import org.jetbrains.exposed.v1.core.Table
 
 internal object ProviderSettingsTable : Table("provider_settings") {
     val providerId = varchar("provider_id", 64)
-    val apiKey = text("api_key").nullable()
     val useCustomBaseUrl = bool("use_custom_base_url").default(false)
     val baseUrl = text("base_url").nullable()
     val extrasJson = text("extras_json").default("{}")
@@ -15,7 +14,6 @@ internal object ProviderSettingsTable : Table("provider_settings") {
 internal object ModelProviderSettingsTable : Table("model_provider_settings") {
     val configuredModelId = varchar("configured_model_id", 64)
     val providerId = varchar("provider_id", 64)
-    val apiKey = text("api_key").nullable()
     val useCustomBaseUrl = bool("use_custom_base_url").default(false)
     val baseUrl = text("base_url").nullable()
     val extrasJson = text("extras_json").default("{}")

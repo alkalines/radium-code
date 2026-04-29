@@ -156,7 +156,6 @@ class AgentModelConfigStore @JvmOverloads internal constructor(
             if (settings.configuredModelId == null) {
                 ProviderSettingsTable.upsert {
                     it[providerId] = settings.providerId
-                    it[apiKey] = null
                     it[useCustomBaseUrl] = settings.useCustomBaseUrl
                     it[baseUrl] = settings.baseUrl
                     it[extrasJson] = json.encodeToString(settings.extras)
@@ -166,7 +165,6 @@ class AgentModelConfigStore @JvmOverloads internal constructor(
                 ModelProviderSettingsTable.upsert {
                     it[configuredModelId] = settings.configuredModelId
                     it[providerId] = settings.providerId
-                    it[apiKey] = null
                     it[useCustomBaseUrl] = settings.useCustomBaseUrl
                     it[baseUrl] = settings.baseUrl
                     it[extrasJson] = json.encodeToString(settings.extras)

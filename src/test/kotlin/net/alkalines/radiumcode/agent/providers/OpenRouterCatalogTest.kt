@@ -55,6 +55,17 @@ class OpenRouterCatalogTest {
     }
 
     @Test
+    fun `catalog model ids are stable across parses`() {
+        val provider = OpenRouterProvider()
+
+        val first = provider.parseCatalog(SAMPLE_CATALOG).map { it.id }
+        val second = provider.parseCatalog(SAMPLE_CATALOG).map { it.id }
+
+        assertEquals(first, second)
+        assertEquals("openrouter:openai/gpt-5.4", first.first())
+    }
+
+    @Test
     fun `derives capabilities from supported parameters`() {
         val provider = OpenRouterProvider()
 

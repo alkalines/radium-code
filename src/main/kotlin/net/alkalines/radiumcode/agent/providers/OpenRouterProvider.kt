@@ -1,16 +1,19 @@
 package net.alkalines.radiumcode.agent.providers
 
 import com.intellij.openapi.diagnostic.Logger
+import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -204,7 +207,7 @@ class OpenRouterProvider internal constructor(
                 }
             }
             IlModelDescriptor(
-                id = UUID.randomUUID().toString(),
+                id = catalogModelId(modelId),
                 providerId = providerId,
                 modelId = modelId,
                 displayName = displayName,
@@ -224,13 +227,18 @@ class OpenRouterProvider internal constructor(
     private fun JsonObject.priceFor(key: String): Double? =
         this[key]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()
 
-    override fun stream(request: IlGenerateRequest): Flow<IlStreamEvent> = flow {
+    override fun stream(request: IlGenerateRequest): Flow<IlStreamEvent> = callbackFlow {
+        fun emit(event: IlStreamEvent) {
+            trySendBlocking(event).getOrThrow()
+        }
+        val streamJob = launch(Dispatchers.IO) {
+            try {
         val syntheticTurnId = "openrouter-turn-${System.currentTimeMillis()}"
         val apiKey = resolveApiKey(request.model.id).orEmpty()
         if (apiKey.isBlank()) {
             emit(TurnStarted("preflight.created", syntheticTurnId, IlRole.ASSISTANT, meta("preflight.created", requestIndex = request.requestIndex())))
             emit(StreamError("missing-key", syntheticTurnId, "OpenRouter API key is not configured. Open Config to add it.", meta("error", requestIndex = request.requestIndex())))
-            return@flow
+            return@launch
         }
 
         val body = buildRequestBody(request).toString()
@@ -272,7 +280,7 @@ class OpenRouterProvider internal constructor(
                         )
                     )
                 )
-                return@flow
+                return@launch
             }
 
             var sawTerminalEvent = false
@@ -289,10 +297,10 @@ class OpenRouterProvider internal constructor(
                         meta("response.body.missing", generationId, responseId = turnId, requestIndex = request.requestIndex()),
                     )
                 )
-                return@flow
+                return@launch
             }
 
-            InputStreamReader(reader.inputStream(), Charsets.UTF_8).use { charReader ->
+            InputStreamReader(reader.inputStream(), Charsets.UTF_8).buffered().use { charReader ->
                 readSseEvents(charReader) { payloadText ->
                     currentCoroutineContext().ensureActive()
                     if (payloadText == "[DONE]") {
@@ -453,7 +461,14 @@ class OpenRouterProvider internal constructor(
                 emit(StreamError("stream.truncated", turnId, "OpenRouter stream ended unexpectedly", meta("stream.truncated", generationId, responseId = turnId, requestIndex = request.requestIndex())))
             }
         }
+            } finally {
+                close()
+            }
+        }
+        awaitClose { streamJob.cancel() }
     }
+
+    private fun catalogModelId(modelId: String): String = "$providerId:$modelId"
 
     internal fun buildRequestBody(request: IlGenerateRequest): JsonObject = buildJsonObject {
         val model = request.model
@@ -596,41 +611,20 @@ class OpenRouterProvider internal constructor(
     }
 
     private suspend fun readSseEvents(
-        reader: InputStreamReader,
+        reader: BufferedReader,
         onEvent: suspend (String) -> Unit,
     ) {
-        val pending = StringBuilder()
         val dataLines = mutableListOf<String>()
-        val chunk = CharArray(2048)
 
         while (true) {
-            val read = reader.read(chunk)
-            if (read == -1) {
-                break
-            }
-            pending.append(chunk, 0, read)
-            var newlineIndex = pending.indexOf("\n")
-            while (newlineIndex >= 0) {
-                var line = pending.substring(0, newlineIndex)
-                if (line.endsWith("\r")) {
-                    line = line.dropLast(1)
+            val line = reader.readLine() ?: break
+            if (line.isEmpty()) {
+                val payload = dataLines.joinToString("\n")
+                dataLines.clear()
+                if (payload.isNotBlank()) {
+                    onEvent(payload)
                 }
-                pending.delete(0, newlineIndex + 1)
-                if (line.isEmpty()) {
-                    val payload = dataLines.joinToString("\n")
-                    dataLines.clear()
-                    if (payload.isNotBlank()) {
-                        onEvent(payload)
-                    }
-                } else if (!line.startsWith(":") && line.startsWith("data:")) {
-                    dataLines += line.removePrefix("data:").removePrefix(" ")
-                }
-                newlineIndex = pending.indexOf("\n")
-            }
-        }
-        if (pending.isNotEmpty()) {
-            val line = pending.toString().removeSuffix("\r")
-            if (line.startsWith("data:")) {
+            } else if (!line.startsWith(":") && line.startsWith("data:")) {
                 dataLines += line.removePrefix("data:").removePrefix(" ")
             }
         }
