@@ -141,6 +141,35 @@ class AgentConfigToolWindowTest {
     }
 
     @Test
+    fun `editing an existing model replaces that model row in list order`() {
+        val minimax = descriptor(modelId = "minimax/minimax-m2.7")
+        val kimi = descriptor(modelId = "moonshotai/kimi-k2.6")
+        val editing = ModelFormState.from(minimax)
+
+        val items = AgentConfigToolWindowContentModel.configuredModelListItems(
+            configuredModels = listOf(minimax, kimi),
+            editing = editing,
+        )
+
+        assertEquals(ConfiguredModelListItem.Editor(editing), items[0])
+        assertEquals(ConfiguredModelListItem.Row(kimi), items[1])
+    }
+
+    @Test
+    fun `adding a new model keeps the form after configured model rows`() {
+        val minimax = descriptor(modelId = "minimax/minimax-m2.7")
+        val editing = ModelFormState.empty(defaultProviderId = "openrouter")
+
+        val items = AgentConfigToolWindowContentModel.configuredModelListItems(
+            configuredModels = listOf(minimax),
+            editing = editing,
+        )
+
+        assertEquals(ConfiguredModelListItem.Row(minimax), items[0])
+        assertEquals(ConfiguredModelListItem.Editor(editing), items[1])
+    }
+
+    @Test
     fun `programmatic model id updates do not reopen model dropdown`() {
         assertFalse(
             AgentConfigToolWindowContentModel.shouldExpandModelDropdown(

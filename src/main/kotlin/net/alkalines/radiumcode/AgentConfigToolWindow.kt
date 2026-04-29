@@ -81,6 +81,28 @@ internal object AgentConfigToolWindowContentModel {
         changeOrigin: ModelSearchTextChangeOrigin,
     ): Boolean = changeOrigin == ModelSearchTextChangeOrigin.USER && previousText != nextText
 
+    fun configuredModelListItems(
+        configuredModels: List<IlModelDescriptor>,
+        editing: ModelFormState?,
+    ): List<ConfiguredModelListItem> {
+        if (editing == null) {
+            return configuredModels.map(ConfiguredModelListItem::Row)
+        }
+        if (!editing.isNew && editing.id.isNotBlank()) {
+            var replaced = false
+            val items = configuredModels.map { model ->
+                if (model.id == editing.id) {
+                    replaced = true
+                    ConfiguredModelListItem.Editor(editing)
+                } else {
+                    ConfiguredModelListItem.Row(model)
+                }
+            }
+            if (replaced) return items
+        }
+        return configuredModels.map(ConfiguredModelListItem::Row) + ConfiguredModelListItem.Editor(editing)
+    }
+
     fun formatPricePerMillionTokens(pricePerToken: Double?): String =
         pricePerToken?.let {
             BigDecimal.valueOf(it)
@@ -100,6 +122,11 @@ internal object AgentConfigToolWindowContentModel {
 internal enum class ModelSearchTextChangeOrigin {
     USER,
     PROGRAMMATIC,
+}
+
+internal sealed interface ConfiguredModelListItem {
+    data class Row(val model: IlModelDescriptor) : ConfiguredModelListItem
+    data class Editor(val state: ModelFormState) : ConfiguredModelListItem
 }
 
 internal class CatalogRefreshTracker {
@@ -179,37 +206,36 @@ internal fun AgentConfigToolWindowContent() {
             )
         }
 
-        configuredModels.forEach { model ->
-            ConfiguredModelRow(
-                model = model,
-                rowSurface = rowSurface,
-                borderColor = borderColor,
-                textColor = textColor,
-                placeholderColor = placeholderColor,
-                onEdit = { editing = ModelFormState.from(model) },
-                onDelete = { store.deleteConfiguredModel(model.id) },
-            )
-        }
-
-        editing?.let { formState ->
-            ModelFormCard(
-                state = formState,
-                registry = registry,
-                providerSettingsMap = providerSettingsMap,
-                rowSurface = rowSurface,
-                borderColor = borderColor,
-                textColor = textColor,
-                placeholderColor = placeholderColor,
-                onSave = { saved ->
-                    store.upsertConfiguredModel(saved)
-                    editing = null
-                },
-                onDelete = { id ->
-                    store.deleteConfiguredModel(id)
-                    editing = null
-                },
-                onCancel = { editing = null },
-            )
+        AgentConfigToolWindowContentModel.configuredModelListItems(configuredModels, editing).forEach { item ->
+            when (item) {
+                is ConfiguredModelListItem.Row -> ConfiguredModelRow(
+                    model = item.model,
+                    rowSurface = rowSurface,
+                    borderColor = borderColor,
+                    textColor = textColor,
+                    placeholderColor = placeholderColor,
+                    onEdit = { editing = ModelFormState.from(item.model) },
+                    onDelete = { store.deleteConfiguredModel(item.model.id) },
+                )
+                is ConfiguredModelListItem.Editor -> ModelFormCard(
+                    state = item.state,
+                    registry = registry,
+                    providerSettingsMap = providerSettingsMap,
+                    rowSurface = rowSurface,
+                    borderColor = borderColor,
+                    textColor = textColor,
+                    placeholderColor = placeholderColor,
+                    onSave = { saved ->
+                        store.upsertConfiguredModel(saved)
+                        editing = null
+                    },
+                    onDelete = { id ->
+                        store.deleteConfiguredModel(id)
+                        editing = null
+                    },
+                    onCancel = { editing = null },
+                )
+            }
         }
     }
 }
